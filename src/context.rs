@@ -8,8 +8,8 @@ pub struct ContextParams {
     pub n_batch: u32,
     pub n_ubatch: u32,
     pub n_seq_max: u32,
-    pub n_threads: u32,
-    pub n_threads_batch: u32,
+    pub n_threads: i32,
+    pub n_threads_batch: i32,
     pub rope_scaling_type: sys::llama_rope_scaling_type,
     pub pooling_type: sys::llama_pooling_type,
     pub attention_type: sys::llama_attention_type,
@@ -24,6 +24,8 @@ pub struct ContextParams {
     pub embeddings: bool,
     pub flash_attn: bool,
     pub offload_kqv: bool,
+    pub no_perf: bool,
+    pub op_offload: bool,
     pub swa_full: bool,
     pub kv_unified: bool,
 }
@@ -35,8 +37,8 @@ impl Default for ContextParams {
             n_batch: 2048,
             n_ubatch: 512,
             n_seq_max: 1,
-            n_threads: num_cpus::get() as u32,
-            n_threads_batch: num_cpus::get() as u32,
+            n_threads: num_cpus::get() as i32,
+            n_threads_batch: num_cpus::get() as i32,
             rope_scaling_type: sys::llama_rope_scaling_type::LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
             pooling_type: sys::llama_pooling_type::LLAMA_POOLING_TYPE_UNSPECIFIED,
             attention_type: sys::llama_attention_type::LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -51,6 +53,8 @@ impl Default for ContextParams {
             embeddings: false,
             flash_attn: false,
             offload_kqv: true,
+            no_perf: false,
+            op_offload: false,
             swa_full: true,
             kv_unified: false,
         }
@@ -88,8 +92,10 @@ impl Context {
         llama_params.yarn_orig_ctx = params.yarn_orig_ctx;
         llama_params.defrag_thold = params.defrag_thold;
         llama_params.embeddings = params.embeddings;
-        llama_params.flash_attn = params.flash_attn;
         llama_params.offload_kqv = params.offload_kqv;
+        llama_params.flash_attn = params.flash_attn;
+        llama_params.no_perf = params.no_perf;
+        llama_params.op_offload = params.op_offload;
         llama_params.swa_full = params.swa_full;
         llama_params.kv_unified = params.kv_unified;
         
@@ -336,92 +342,98 @@ impl Context {
         }
     }
 
-    // ==================== KV Cache Operations ====================
+    // ==================== Memory/KV Cache Operations ====================
 
-    /// Clear the KV cache - removes all tokens
+    /// Get the memory handle for this context
+    fn get_memory(&self) -> sys::llama_memory_t {
+        unsafe { sys::llama_get_memory(self.ctx_ptr) }
+    }
+
+    /// Clear the memory/KV cache - removes all tokens
     ///
     /// Use this to reset the context for a new conversation.
+    /// If `data` is true, also clear the underlying data.
     pub fn kv_cache_clear(&mut self) {
         unsafe {
-            sys::llama_kv_cache_clear(self.ctx_ptr);
+            let mem = self.get_memory();
+            sys::llama_memory_clear(mem, false);
         }
     }
 
-    /// Remove tokens from the KV cache
+    /// Remove tokens from the memory/KV cache
     ///
     /// Removes all tokens in positions [p0, p1) for the specified sequence.
     /// Set seq_id to -1 to remove from all sequences.
     /// Returns true if successful.
     pub fn kv_cache_seq_rm(&mut self, seq_id: i32, p0: i32, p1: i32) -> bool {
         unsafe {
-            sys::llama_kv_cache_seq_rm(self.ctx_ptr, seq_id, p0, p1)
+            let mem = self.get_memory();
+            sys::llama_memory_seq_rm(mem, seq_id, p0, p1)
         }
     }
 
-    /// Copy tokens from one sequence to another in the KV cache
+    /// Copy tokens from one sequence to another in the memory/KV cache
     ///
     /// Copies all tokens in positions [p0, p1) from seq_id_src to seq_id_dst.
     pub fn kv_cache_seq_cp(&mut self, seq_id_src: i32, seq_id_dst: i32, p0: i32, p1: i32) {
         unsafe {
-            sys::llama_kv_cache_seq_cp(self.ctx_ptr, seq_id_src, seq_id_dst, p0, p1);
+            let mem = self.get_memory();
+            sys::llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
         }
     }
 
     /// Keep only the specified sequence, removing all others
     pub fn kv_cache_seq_keep(&mut self, seq_id: i32) {
         unsafe {
-            sys::llama_kv_cache_seq_keep(self.ctx_ptr, seq_id);
+            let mem = self.get_memory();
+            sys::llama_memory_seq_keep(mem, seq_id);
         }
     }
 
-    /// Shift token positions in the KV cache
+    /// Shift token positions in the memory/KV cache
     ///
     /// Adds delta to all token positions in [p0, p1) for the specified sequence.
     /// Useful for context shifting when the cache is full.
     pub fn kv_cache_seq_add(&mut self, seq_id: i32, p0: i32, p1: i32, delta: i32) {
         unsafe {
-            sys::llama_kv_cache_seq_add(self.ctx_ptr, seq_id, p0, p1, delta);
+            let mem = self.get_memory();
+            sys::llama_memory_seq_add(mem, seq_id, p0, p1, delta);
         }
     }
 
     /// Divide positions by a factor (for position interpolation)
     pub fn kv_cache_seq_div(&mut self, seq_id: i32, p0: i32, p1: i32, d: i32) {
         unsafe {
-            sys::llama_kv_cache_seq_div(self.ctx_ptr, seq_id, p0, p1, d);
+            let mem = self.get_memory();
+            sys::llama_memory_seq_div(mem, seq_id, p0, p1, d);
         }
     }
 
-    /// Get the maximum position in the KV cache for a sequence
+    /// Get the minimum position in the memory/KV cache for a sequence
+    ///
+    /// Returns -1 if the sequence is empty.
+    pub fn kv_cache_seq_pos_min(&self, seq_id: i32) -> i32 {
+        unsafe {
+            let mem = self.get_memory();
+            sys::llama_memory_seq_pos_min(mem, seq_id)
+        }
+    }
+
+    /// Get the maximum position in the memory/KV cache for a sequence
     ///
     /// Returns -1 if the sequence is empty.
     pub fn kv_cache_seq_pos_max(&self, seq_id: i32) -> i32 {
         unsafe {
-            sys::llama_kv_cache_seq_pos_max(self.ctx_ptr, seq_id)
+            let mem = self.get_memory();
+            sys::llama_memory_seq_pos_max(mem, seq_id)
         }
     }
 
-    /// Check if the KV cache supports shifting
+    /// Check if the memory/KV cache supports shifting
     pub fn kv_cache_can_shift(&self) -> bool {
         unsafe {
-            sys::llama_kv_cache_can_shift(self.ctx_ptr)
-        }
-    }
-
-    /// Defragment the KV cache
-    ///
-    /// This optimizes memory usage by removing gaps in the cache.
-    pub fn kv_cache_defrag(&mut self) {
-        unsafe {
-            sys::llama_kv_cache_defrag(self.ctx_ptr);
-        }
-    }
-
-    /// Apply pending KV cache updates
-    ///
-    /// Call this after kv_cache_seq_add, kv_cache_seq_div, or kv_cache_defrag.
-    pub fn kv_cache_update(&mut self) {
-        unsafe {
-            sys::llama_kv_cache_update(self.ctx_ptr);
+            let mem = self.get_memory();
+            sys::llama_memory_can_shift(mem)
         }
     }
 

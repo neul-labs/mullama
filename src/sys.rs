@@ -77,14 +77,14 @@ pub struct ggml_backend_dev {
 }
 
 #[repr(C)]
-pub struct ggml_backend_sched_eval_callback {
+pub struct ggml_tensor {
     _private: [u8; 0],
 }
 
-#[repr(C)]
-pub struct ggml_abort_callback {
-    _private: [u8; 0],
-}
+// Callback type aliases
+pub type ggml_backend_sched_eval_callback = Option<unsafe extern "C" fn(t: *mut ggml_tensor, ask: bool, user_data: *mut c_void) -> bool>;
+pub type ggml_abort_callback = Option<unsafe extern "C" fn(data: *mut c_void) -> bool>;
+pub type ggml_backend_dev_t = *mut ggml_backend_dev;
 
 #[repr(C)]
 pub struct llama_adapter_lora {
@@ -361,39 +361,46 @@ pub struct llama_model_tensor_buft_override {
     pub buft: *mut ggml_backend_buffer_type,
 }
 
-// Parameter structures
+// Parameter structures - must match llama.h exactly!
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct llama_model_params {
-    pub devices: *mut *mut ggml_backend_dev,
+    // NULL-terminated list of devices to use for offloading
+    pub devices: *mut ggml_backend_dev_t,
+    // NULL-terminated list of buffer types to use for tensors that match a pattern
     pub tensor_buft_overrides: *const llama_model_tensor_buft_override,
     pub n_gpu_layers: i32,
     pub split_mode: llama_split_mode,
     pub main_gpu: i32,
     pub tensor_split: *const f32,
+    // Progress callback
+    pub progress_callback: llama_progress_callback,
+    pub progress_callback_user_data: *mut c_void,
+    // KV overrides
+    pub kv_overrides: *const llama_model_kv_override,
+    // Keep booleans together at the end to avoid misalignment
     pub vocab_only: c_bool,
     pub use_mmap: c_bool,
     pub use_mlock: c_bool,
     pub check_tensors: c_bool,
     pub use_extra_bufts: c_bool,
-    pub progress_callback: llama_progress_callback,
-    pub progress_callback_user_data: *mut c_void,
-    pub kv_overrides: *const llama_model_kv_override,
 }
 
+// llama_context_params must match llama.h exactly!
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct llama_context_params {
-    pub seed: u32,
-    pub n_ctx: u32,
-    pub n_batch: u32,
-    pub n_ubatch: u32,
-    pub n_seq_max: u32,
-    pub n_threads: u32,
-    pub n_threads_batch: u32,
+    pub n_ctx: u32,             // text context, 0 = from model
+    pub n_batch: u32,           // logical maximum batch size
+    pub n_ubatch: u32,          // physical maximum batch size
+    pub n_seq_max: u32,         // max number of sequences
+    pub n_threads: i32,         // number of threads for generation
+    pub n_threads_batch: i32,   // number of threads for batch processing
+
     pub rope_scaling_type: llama_rope_scaling_type,
     pub pooling_type: llama_pooling_type,
     pub attention_type: llama_attention_type,
+
     pub rope_freq_base: f32,
     pub rope_freq_scale: f32,
     pub yarn_ext_factor: f32,
@@ -402,9 +409,25 @@ pub struct llama_context_params {
     pub yarn_beta_slow: f32,
     pub yarn_orig_ctx: u32,
     pub defrag_thold: f32,
+
+    // Eval callback
+    pub cb_eval: ggml_backend_sched_eval_callback,
+    pub cb_eval_user_data: *mut c_void,
+
+    // KV cache data types
+    pub type_k: ggml_type,
+    pub type_v: ggml_type,
+
+    // Abort callback
+    pub abort_callback: ggml_abort_callback,
+    pub abort_callback_data: *mut c_void,
+
+    // Keep booleans together at the end
     pub embeddings: c_bool,
-    pub flash_attn: c_bool,
     pub offload_kqv: c_bool,
+    pub flash_attn: c_bool,
+    pub no_perf: c_bool,
+    pub op_offload: c_bool,
     pub swa_full: c_bool,
     pub kv_unified: c_bool,
 }
@@ -557,6 +580,42 @@ extern "C" {
     pub fn llama_pooling_type(ctx: *const llama_context) -> llama_pooling_type;
 
     //
+    // Memory/KV cache management
+    //
+    pub fn llama_memory_clear(mem: llama_memory_t, data: c_bool);
+    pub fn llama_memory_seq_rm(
+        mem: llama_memory_t,
+        seq_id: llama_seq_id,
+        p0: llama_pos,
+        p1: llama_pos,
+    ) -> c_bool;
+    pub fn llama_memory_seq_cp(
+        mem: llama_memory_t,
+        seq_id_src: llama_seq_id,
+        seq_id_dst: llama_seq_id,
+        p0: llama_pos,
+        p1: llama_pos,
+    );
+    pub fn llama_memory_seq_keep(mem: llama_memory_t, seq_id: llama_seq_id);
+    pub fn llama_memory_seq_add(
+        mem: llama_memory_t,
+        seq_id: llama_seq_id,
+        p0: llama_pos,
+        p1: llama_pos,
+        delta: llama_pos,
+    );
+    pub fn llama_memory_seq_div(
+        mem: llama_memory_t,
+        seq_id: llama_seq_id,
+        p0: llama_pos,
+        p1: llama_pos,
+        d: c_int,
+    );
+    pub fn llama_memory_seq_pos_min(mem: llama_memory_t, seq_id: llama_seq_id) -> llama_pos;
+    pub fn llama_memory_seq_pos_max(mem: llama_memory_t, seq_id: llama_seq_id) -> llama_pos;
+    pub fn llama_memory_can_shift(mem: llama_memory_t) -> c_bool;
+
+    //
     // Model information
     //
     pub fn llama_model_get_vocab(model: *const llama_model) -> *const llama_vocab;
@@ -576,7 +635,7 @@ extern "C" {
     pub fn llama_vocab_n_tokens(vocab: *const llama_vocab) -> i32;
 
     pub fn llama_tokenize(
-        model: *const llama_model,
+        vocab: *const llama_vocab,
         text: *const c_char,
         text_len: i32,
         tokens: *mut llama_token,
@@ -595,7 +654,7 @@ extern "C" {
     ) -> i32;
 
     pub fn llama_detokenize(
-        model: *const llama_model,
+        vocab: *const llama_vocab,
         tokens: *const llama_token,
         n_tokens: i32,
         text: *mut c_char,
@@ -675,46 +734,6 @@ extern "C" {
     pub fn llama_get_embeddings(ctx: *mut llama_context) -> *mut c_float;
     pub fn llama_get_embeddings_ith(ctx: *mut llama_context, i: i32) -> *mut c_float;
     pub fn llama_get_embeddings_seq(ctx: *mut llama_context, seq_id: llama_seq_id) -> *mut c_float;
-
-    //
-    // KV cache management
-    //
-    pub fn llama_kv_cache_clear(ctx: *mut llama_context);
-    pub fn llama_kv_cache_seq_rm(
-        ctx: *mut llama_context,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-    ) -> c_bool;
-    pub fn llama_kv_cache_seq_cp(
-        ctx: *mut llama_context,
-        seq_id_src: llama_seq_id,
-        seq_id_dst: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-    );
-    pub fn llama_kv_cache_seq_keep(
-        ctx: *mut llama_context,
-        seq_id: llama_seq_id,
-    );
-    pub fn llama_kv_cache_seq_add(
-        ctx: *mut llama_context,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-        delta: llama_pos,
-    );
-    pub fn llama_kv_cache_seq_div(
-        ctx: *mut llama_context,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-        d: i32,
-    );
-    pub fn llama_kv_cache_seq_pos_max(ctx: *mut llama_context, seq_id: llama_seq_id) -> llama_pos;
-    pub fn llama_kv_cache_defrag(ctx: *mut llama_context);
-    pub fn llama_kv_cache_update(ctx: *mut llama_context);
-    pub fn llama_kv_cache_can_shift(ctx: *mut llama_context) -> c_bool;
 
     //
     // State management
@@ -886,42 +905,6 @@ extern "C" {
         il_start: i32,
         il_end: i32,
     ) -> i32;
-
-    //
-    // Memory/KV cache management
-    //
-    pub fn llama_memory_clear(mem: llama_memory_t, data: c_bool);
-    pub fn llama_memory_seq_rm(
-        mem: llama_memory_t,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-    ) -> c_bool;
-    pub fn llama_memory_seq_cp(
-        mem: llama_memory_t,
-        seq_id_src: llama_seq_id,
-        seq_id_dst: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-    );
-    pub fn llama_memory_seq_keep(mem: llama_memory_t, seq_id: llama_seq_id);
-    pub fn llama_memory_seq_add(
-        mem: llama_memory_t,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-        delta: llama_pos,
-    );
-    pub fn llama_memory_seq_div(
-        mem: llama_memory_t,
-        seq_id: llama_seq_id,
-        p0: llama_pos,
-        p1: llama_pos,
-        d: c_int,
-    );
-    pub fn llama_memory_seq_pos_min(mem: llama_memory_t, seq_id: llama_seq_id) -> llama_pos;
-    pub fn llama_memory_seq_pos_max(mem: llama_memory_t, seq_id: llama_seq_id) -> llama_pos;
-    pub fn llama_memory_can_shift(mem: llama_memory_t) -> c_bool;
 
     //
     // State / sessions

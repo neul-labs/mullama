@@ -19,7 +19,13 @@ pub enum MullamaError {
 
     #[error("Sampling error: {0}")]
     SamplingError(String),
-    
+
+    #[error("Embedding error: {0}")]
+    EmbeddingError(String),
+
+    #[error("Memory error: {0}")]
+    MemoryError(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
     
@@ -73,4 +79,7 @@ pub enum MullamaError {
 
     #[error("WebSocket error: {0}")]
     WebSocketError(String),
+
+    #[error("Hugging Face error: {0}")]
+    HuggingFaceError(String),
 }

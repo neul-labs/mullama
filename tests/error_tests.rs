@@ -140,8 +140,8 @@ mod context_error_tests {
         assert_eq!(params.n_threads, 0);
 
         // Test extreme thread counts
-        params.n_threads = u32::MAX;
-        assert_eq!(params.n_threads, u32::MAX);
+        params.n_threads = i32::MAX;
+        assert_eq!(params.n_threads, i32::MAX);
     }
 
     #[test]
@@ -372,7 +372,8 @@ mod memory_error_tests {
     fn test_memory_manager_initialization() {
         let memory_manager = MemoryManager::new();
         // Should not crash during initialization
-        assert_eq!(memory_manager._placeholder, 0);
+        // New manager should not be valid (no context associated)
+        assert!(!memory_manager.is_valid());
     }
 
     #[test]

@@ -60,10 +60,21 @@ pub struct CharClass {
 }
 
 /// Compiled grammar for efficient processing
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CompiledGrammar {
-    grammar_ptr: *mut std::ffi::c_void, // Placeholder for grammar
-    rules_data: Vec<u8>, // Keep the data alive
+    /// The grammar as a GBNF string
+    gbnf_string: CString,
+    /// The root rule name
+    root_rule: CString,
+}
+
+impl Clone for CompiledGrammar {
+    fn clone(&self) -> Self {
+        Self {
+            gbnf_string: self.gbnf_string.clone(),
+            root_rule: self.root_rule.clone(),
+        }
+    }
 }
 
 impl Grammar {
@@ -162,11 +173,12 @@ impl Grammar {
         let gbnf_string = self.to_gbnf();
         let c_grammar = CString::new(gbnf_string)
             .map_err(|_| MullamaError::GrammarError("Invalid grammar string".to_string()))?;
+        let c_root = CString::new(self.root_rule.clone())
+            .map_err(|_| MullamaError::GrammarError("Invalid root rule name".to_string()))?;
 
-        // This is a simplified compilation - in practice, you'd use llama.cpp's grammar parser
         let compiled = CompiledGrammar {
-            grammar_ptr: std::ptr::null_mut(), // Would be actual compiled grammar
-            rules_data: c_grammar.into_bytes(),
+            gbnf_string: c_grammar,
+            root_rule: c_root,
         };
 
         self.compiled = Some(compiled);
@@ -524,11 +536,135 @@ impl fmt::Display for Grammar {
     }
 }
 
-impl Drop for CompiledGrammar {
+impl CompiledGrammar {
+    /// Get the grammar string for use with llama.cpp
+    pub fn grammar_str(&self) -> &CString {
+        &self.gbnf_string
+    }
+
+    /// Get the root rule name
+    pub fn root_rule(&self) -> &CString {
+        &self.root_rule
+    }
+
+    /// Create a grammar sampler for this grammar
+    ///
+    /// # Arguments
+    /// * `vocab` - The vocabulary to use (from model)
+    ///
+    /// # Safety
+    /// The vocab pointer must be valid for the lifetime of the sampler
+    pub fn create_sampler(&self, vocab: *const sys::llama_vocab) -> *mut sys::llama_sampler {
+        unsafe {
+            sys::llama_sampler_init_grammar(
+                vocab,
+                self.gbnf_string.as_ptr(),
+                self.root_rule.as_ptr(),
+            )
+        }
+    }
+
+    /// Create a lazy grammar sampler that only activates on trigger words
+    ///
+    /// # Arguments
+    /// * `model` - The model pointer
+    /// * `trigger_words` - Words that trigger grammar enforcement
+    /// * `trigger_tokens` - Tokens that trigger grammar enforcement
+    pub fn create_lazy_sampler(
+        &self,
+        model: *const sys::llama_model,
+        trigger_words: &[&str],
+        trigger_tokens: &[i32],
+    ) -> Result<*mut sys::llama_sampler, MullamaError> {
+        // Convert trigger words to CStrings
+        let c_trigger_words: Vec<CString> = trigger_words
+            .iter()
+            .map(|s| CString::new(*s))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| MullamaError::GrammarError("Invalid trigger word".to_string()))?;
+
+        let c_trigger_ptrs: Vec<*const std::os::raw::c_char> = c_trigger_words
+            .iter()
+            .map(|s| s.as_ptr())
+            .collect();
+
+        let sampler = unsafe {
+            sys::llama_sampler_init_grammar_lazy(
+                model,
+                self.gbnf_string.as_ptr(),
+                self.root_rule.as_ptr(),
+                c_trigger_ptrs.as_ptr(),
+                c_trigger_ptrs.len(),
+                trigger_tokens.as_ptr(),
+                trigger_tokens.len(),
+            )
+        };
+
+        Ok(sampler)
+    }
+}
+
+/// Grammar sampler wrapper for safe usage
+pub struct GrammarSampler {
+    sampler_ptr: *mut sys::llama_sampler,
+}
+
+impl GrammarSampler {
+    /// Create a new grammar sampler from a compiled grammar
+    pub fn new(grammar: &CompiledGrammar, vocab: *const sys::llama_vocab) -> Self {
+        Self {
+            sampler_ptr: grammar.create_sampler(vocab),
+        }
+    }
+
+    /// Create from a GBNF string directly
+    pub fn from_gbnf(
+        vocab: *const sys::llama_vocab,
+        gbnf: &str,
+        root: &str,
+    ) -> Result<Self, MullamaError> {
+        let c_grammar = CString::new(gbnf)
+            .map_err(|_| MullamaError::GrammarError("Invalid grammar string".to_string()))?;
+        let c_root = CString::new(root)
+            .map_err(|_| MullamaError::GrammarError("Invalid root rule".to_string()))?;
+
+        let sampler_ptr = unsafe {
+            sys::llama_sampler_init_grammar(
+                vocab,
+                c_grammar.as_ptr(),
+                c_root.as_ptr(),
+            )
+        };
+
+        Ok(Self { sampler_ptr })
+    }
+
+    /// Get the raw sampler pointer for use with llama.cpp
+    pub fn as_ptr(&self) -> *mut sys::llama_sampler {
+        self.sampler_ptr
+    }
+
+    /// Accept a token (call after sampling)
+    pub fn accept(&mut self, token: i32) {
+        unsafe {
+            sys::llama_sampler_accept(self.sampler_ptr, token);
+        }
+    }
+
+    /// Reset the sampler state
+    pub fn reset(&mut self) {
+        unsafe {
+            sys::llama_sampler_reset(self.sampler_ptr);
+        }
+    }
+}
+
+impl Drop for GrammarSampler {
     fn drop(&mut self) {
-        if !self.grammar_ptr.is_null() {
-            // In a real implementation, you'd free the grammar here
-            // unsafe { sys::llama_grammar_free(self.grammar_ptr); }
+        if !self.sampler_ptr.is_null() {
+            unsafe {
+                sys::llama_sampler_free(self.sampler_ptr);
+            }
         }
     }
 }

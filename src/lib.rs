@@ -117,6 +117,10 @@ pub mod multimodal;
 // Advanced features
 pub mod lora;
 pub mod grammar;
+pub mod huggingface;
+
+// Export Hugging Face types at crate root for convenience
+pub use huggingface::{HFClient, HFModelInfo, GGUFFile, QuantizationType, ModelSearchFilters};
 
 // ==================== System-level Functions ====================
 
@@ -526,7 +530,8 @@ mod tests {
     fn test_memory_manager_structure() {
         // Test that we can create memory manager structs
         let memory_manager = memory::MemoryManager::new();
-        assert_eq!(memory_manager._placeholder, 0);
+        // New manager should not be valid (no context associated)
+        assert!(!memory_manager.is_valid());
     }
     
     #[test]

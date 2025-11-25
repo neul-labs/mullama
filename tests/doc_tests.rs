@@ -417,6 +417,8 @@ mod feature_completeness_tests {
             embeddings: false,
             flash_attn: false,
             offload_kqv: true,
+            no_perf: false,
+            op_offload: false,
             swa_full: true,
             kv_unified: false,
         };

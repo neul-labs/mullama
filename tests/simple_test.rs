@@ -57,7 +57,8 @@ fn test_session_creation() {
 fn test_memory_manager() {
     // Test memory manager
     let memory_manager = MemoryManager::new();
-    assert_eq!(memory_manager._placeholder, 0);
+    // New manager should not be valid (no context associated)
+    assert!(!memory_manager.is_valid());
 }
 
 #[test]

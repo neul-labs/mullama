@@ -955,7 +955,6 @@ fn detect_speech(samples: &[f32]) -> bool {
     // Heuristic thresholds for speech detection
     energy > 0.01 && zcr > 0.1 && zcr < 0.4
 }
-}
 
 #[cfg(test)]
 mod tests {

@@ -116,8 +116,12 @@ impl Model {
 
         // Apply all our advanced parameters
         llama_params.n_gpu_layers = params.n_gpu_layers;
-        llama_params.split_mode = params.split_mode;
-        llama_params.main_gpu = params.main_gpu;
+        // Only set main_gpu when GPU layers are actually being used
+        // This avoids "invalid value for main_gpu" errors when no GPU is available
+        if params.n_gpu_layers > 0 {
+            llama_params.split_mode = params.split_mode;
+            llama_params.main_gpu = params.main_gpu;
+        }
         llama_params.vocab_only = params.vocab_only as sys::c_bool;
         llama_params.use_mmap = params.use_mmap as sys::c_bool;
         llama_params.use_mlock = params.use_mlock as sys::c_bool;
@@ -184,10 +188,17 @@ impl Model {
         let c_text = CString::new(text)
             .map_err(|_| MullamaError::TokenizationError("Invalid text".to_string()))?;
 
+        // Get the vocab from the model
+        let vocab = unsafe { sys::llama_model_get_vocab(self.inner.model_ptr) };
+        if vocab.is_null() {
+            return Err(MullamaError::TokenizationError("Failed to get vocabulary".to_string()));
+        }
+
         // First, get the required buffer size by passing null tokens
-        let max_tokens = unsafe {
+        // When n_tokens_max is 0, llama_tokenize returns the negative of the required size
+        let result = unsafe {
             sys::llama_tokenize(
-                self.inner.model_ptr,
+                vocab,
                 c_text.as_ptr(),
                 text.len() as i32,
                 ptr::null_mut(),
@@ -197,11 +208,8 @@ impl Model {
             )
         };
 
-        if max_tokens < 0 {
-            return Err(MullamaError::TokenizationError(
-                format!("Tokenization failed with code: {}", max_tokens)
-            ));
-        }
+        // When buffer is too small, returns negative of required size
+        let max_tokens = if result < 0 { -result } else { result };
 
         if max_tokens == 0 {
             return Ok(Vec::new());
@@ -211,7 +219,7 @@ impl Model {
         let mut tokens = vec![0i32; max_tokens as usize];
         let actual_tokens = unsafe {
             sys::llama_tokenize(
-                self.inner.model_ptr,
+                vocab,
                 c_text.as_ptr(),
                 text.len() as i32,
                 tokens.as_mut_ptr(),
@@ -237,13 +245,19 @@ impl Model {
             return Ok(String::new());
         }
 
+        // Get the vocab from the model
+        let vocab = unsafe { sys::llama_model_get_vocab(self.inner.model_ptr) };
+        if vocab.is_null() {
+            return Err(MullamaError::TokenizationError("Failed to get vocabulary".to_string()));
+        }
+
         // Convert tokens to the correct type
         let llama_tokens: Vec<sys::llama_token> = tokens.iter().map(|&t| t as sys::llama_token).collect();
 
         // First, get the required buffer size
         let max_chars = unsafe {
             sys::llama_detokenize(
-                self.inner.model_ptr,
+                vocab,
                 llama_tokens.as_ptr(),
                 tokens.len() as i32,
                 ptr::null_mut(),
@@ -267,7 +281,7 @@ impl Model {
         let mut buffer = vec![0u8; max_chars as usize + 1]; // +1 for null terminator
         let actual_chars = unsafe {
             sys::llama_detokenize(
-                self.inner.model_ptr,
+                vocab,
                 llama_tokens.as_ptr(),
                 tokens.len() as i32,
                 buffer.as_mut_ptr() as *mut c_char,

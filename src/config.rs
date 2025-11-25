@@ -142,10 +142,10 @@ pub struct ContextConfig {
     pub n_seq_max: u32,
     /// Number of threads for generation
     #[serde(default)]
-    pub n_threads: u32,
+    pub n_threads: i32,
     /// Number of threads for batch processing
     #[serde(default)]
-    pub n_threads_batch: u32,
+    pub n_threads_batch: i32,
     /// Enable embeddings
     #[serde(default)]
     pub embeddings: bool,
@@ -164,8 +164,8 @@ impl Default for ContextConfig {
             n_batch: 512,
             n_ubatch: 512,
             n_seq_max: 1,
-            n_threads: num_cpus::get() as u32,
-            n_threads_batch: num_cpus::get() as u32,
+            n_threads: num_cpus::get() as i32,
+            n_threads_batch: num_cpus::get() as i32,
             embeddings: false,
             flash_attn: false,
             offload_kqv: false,

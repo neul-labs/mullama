@@ -5,9 +5,14 @@
 //! generation while maintaining the quality of the larger model.
 
 use crate::error::MullamaError;
-use crate::{Model, Context, Token};
+use crate::{Model, Context};
+use crate::token::TokenId;
+use crate::context::ContextParams;
 use std::sync::Arc;
 use std::collections::VecDeque;
+
+/// Type alias for token
+pub type Token = TokenId;
 
 /// Speculative decoding engine that orchestrates draft and target models
 #[derive(Debug)]
@@ -121,8 +126,8 @@ impl SpeculativeDecoder {
         Self::validate_models(&target_model, &draft_model)?;
 
         // Create contexts
-        let target_context = Context::new(&target_model, Default::default())?;
-        let draft_context = Context::new(&draft_model, Default::default())?;
+        let target_context = Context::new(target_model.clone(), ContextParams::default())?;
+        let draft_context = Context::new(draft_model.clone(), ContextParams::default())?;
 
         Ok(Self {
             target_model,
@@ -208,11 +213,15 @@ impl SpeculativeDecoder {
         let mut candidates = Vec::new();
 
         for _ in 0..self.config.lookahead_tokens {
-            // Get logits from draft model
-            let logits = self.draft_context.get_logits()?;
+            // Get logits from draft model (for the last token position)
+            let logits = self.draft_context.get_logits();
+
+            if logits.is_empty() {
+                return Err(MullamaError::GenerationError("Empty logits from draft model".to_string()));
+            }
 
             // Apply temperature
-            let scaled_logits = self.apply_temperature(&logits, self.config.draft_temperature);
+            let scaled_logits = self.apply_temperature(logits, self.config.draft_temperature);
 
             // Sample token
             let token = self.sample_from_logits(&scaled_logits)?;
@@ -226,16 +235,16 @@ impl SpeculativeDecoder {
             });
 
             // Evaluate token in draft context for next iteration
-            self.draft_context.eval_token(token)?;
+            self.draft_context.decode(&[token])?;
 
             // Early stopping if end token
-            if self.draft_model.is_eog_token(token) {
+            if self.draft_model.token_is_eog(token) {
                 break;
             }
         }
 
         // Save draft context state for potential rollback
-        let draft_context_state = self.draft_context.save_state()?;
+        let draft_context_state = self.draft_context.save_state();
 
         Ok(DraftProposal {
             candidates,
@@ -253,21 +262,25 @@ impl SpeculativeDecoder {
 
         for (i, candidate) in proposal.candidates.iter().enumerate() {
             // Get target model's probability for this token
-            let target_logits = self.target_context.get_logits()?;
-            let target_scaled_logits = self.apply_temperature(&target_logits, self.config.target_temperature);
+            let target_logits = self.target_context.get_logits();
+            if target_logits.is_empty() {
+                return Err(MullamaError::GenerationError("Empty logits from target model".to_string()));
+            }
+
+            let target_scaled_logits = self.apply_temperature(target_logits, self.config.target_temperature);
             let target_prob = target_scaled_logits[candidate.token as usize].exp();
 
             // Accept/reject based on probability ratio
             let acceptance_ratio = target_prob / candidate.probability;
-            let random_value: f32 = rand::random();
+            let random_value: f32 = self.simple_random();
 
             if random_value < acceptance_ratio.min(1.0) && acceptance_ratio >= self.config.acceptance_threshold {
                 // Accept the token
                 accepted_tokens.push(candidate.token);
-                self.target_context.eval_token(candidate.token)?;
+                self.target_context.decode(&[candidate.token])?;
 
                 // Check for end token
-                if self.target_model.is_eog_token(candidate.token) {
+                if self.target_model.token_is_eog(candidate.token) {
                     should_continue = false;
                     break;
                 }
@@ -277,10 +290,10 @@ impl SpeculativeDecoder {
                 let corrected_token = self.sample_from_logits(&corrected_logits)?;
 
                 accepted_tokens.push(corrected_token);
-                self.target_context.eval_token(corrected_token)?;
+                self.target_context.decode(&[corrected_token])?;
 
                 // Check for end token
-                if self.target_model.is_eog_token(corrected_token) {
+                if self.target_model.token_is_eog(corrected_token) {
                     should_continue = false;
                 }
 
@@ -310,7 +323,7 @@ impl SpeculativeDecoder {
         let probabilities: Vec<f32> = exp_logits.iter().map(|&x| x / sum).collect();
 
         // Sample using cumulative distribution
-        let random_value: f32 = rand::random();
+        let random_value: f32 = self.simple_random();
         let mut cumulative = 0.0;
 
         for (i, &prob) in probabilities.iter().enumerate() {
@@ -322,6 +335,17 @@ impl SpeculativeDecoder {
 
         // Fallback to last token
         Ok((probabilities.len() - 1) as Token)
+    }
+
+    /// Simple random number generator (0.0 to 1.0)
+    /// Uses a basic LCG for simplicity - in production, consider a better RNG
+    fn simple_random(&self) -> f32 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        ((seed.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7fffffff) as f32 / 0x7fffffff as f32
     }
 
     /// Correct the probability distribution after rejection
@@ -344,18 +368,23 @@ impl SpeculativeDecoder {
 
     /// Initialize both contexts with prompt tokens
     fn initialize_contexts(&mut self, prompt_tokens: &[Token]) -> Result<(), MullamaError> {
-        for &token in prompt_tokens {
-            self.target_context.eval_token(token)?;
-            self.draft_context.eval_token(token)?;
-        }
+        // Clear caches for fresh start
+        self.target_context.kv_cache_clear();
+        self.draft_context.kv_cache_clear();
+
+        // Process prompt tokens
+        self.target_context.decode(prompt_tokens)?;
+        self.draft_context.decode(prompt_tokens)?;
         Ok(())
     }
 
     /// Update both contexts with accepted tokens
     fn update_contexts(&mut self, accepted_tokens: &[Token]) -> Result<(), MullamaError> {
         // Target context is already updated during validation
-        // Update draft context to match
-        self.draft_context.load_state(&self.target_context.save_state()?)?;
+        // Update draft context to match - we need to sync state
+        // Get target state and load into draft
+        let target_state = self.target_context.save_state();
+        let _ = self.draft_context.load_state(&target_state);
 
         Ok(())
     }
