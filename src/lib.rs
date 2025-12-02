@@ -113,6 +113,8 @@ pub mod tokio_integration;
 pub mod web;
 #[cfg(feature = "websockets")]
 pub mod websockets;
+#[cfg(feature = "daemon")]
+pub mod daemon;
 
 // Advanced features
 pub mod grammar;

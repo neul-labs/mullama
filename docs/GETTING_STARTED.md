@@ -535,7 +535,7 @@ async fn load_from_config() -> Result<AsyncModel, MullamaError> {
 
 - 📚 **[API Documentation](https://docs.rs/mullama)** - Complete API reference
 - 🎯 **[Examples Directory](../examples/)** - Practical code examples
-- 📖 **[Integration Guide](./INTEGRATION_FEATURES.md)** - Detailed feature documentation
+- 📖 **[Integration Guide](./FEATURES.md)** - Detailed feature documentation
 - 💬 **[Community Discord](https://discord.gg/mullama)** - Get help and share projects
 
 ### Troubleshooting

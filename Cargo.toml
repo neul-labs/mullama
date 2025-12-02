@@ -27,9 +27,10 @@ web = ["async", "axum", "tower", "tower-http"]
 websockets = ["async", "axum", "tokio-tungstenite"]
 parallel = ["rayon"]
 tokio-runtime = ["tokio", "tokio-util"]
+daemon = ["async", "tokio-runtime", "web", "nng", "ratatui", "crossterm", "clap", "reqwest", "indicatif"]
 windows-optimization = ["windows"]
 macos-optimization = ["core-foundation", "coreaudio-rs"]
-full = ["async", "streaming", "web", "websockets", "multimodal", "parallel", "tokio-runtime", "format-conversion", "streaming-audio"]
+full = ["async", "streaming", "web", "websockets", "multimodal", "parallel", "tokio-runtime", "format-conversion", "streaming-audio", "daemon"]
 
 [dependencies]
 thiserror = "1.0"
@@ -45,7 +46,7 @@ dirs = "5.0"
 
 # Async support
 tokio = { version = "1.0", features = ["full"], optional = true }
-tokio-util = { version = "0.7", features = ["codec", "io"], optional = true }
+tokio-util = { version = "0.7", features = ["codec", "io", "rt"], optional = true }
 futures = { version = "0.3", optional = true }
 async-stream = { version = "0.3", optional = true }
 
@@ -79,6 +80,16 @@ gstreamer = { version = "0.21", optional = true }
 # Real-time audio streaming
 ringbuf = { version = "0.3", optional = true }
 
+# Daemon and TUI
+nng = { version = "1.0", optional = true }
+ratatui = { version = "0.28", optional = true }
+crossterm = { version = "0.28", optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
+
+# HTTP client for HuggingFace downloads
+reqwest = { version = "0.11", features = ["stream", "json"], optional = true }
+indicatif = { version = "0.17", optional = true }
+
 # Platform-specific dependencies
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.48", features = [
@@ -111,3 +122,8 @@ pkg-config = "0.3"
 
 [dev-dependencies]
 anyhow = "1.0"
+
+[[bin]]
+name = "mullama"
+path = "src/bin/mullama.rs"
+required-features = ["daemon"]

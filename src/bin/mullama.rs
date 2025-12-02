@@ -1,0 +1,950 @@
+//! # Mullama - Unified CLI
+//!
+//! A multi-model LLM server with IPC and OpenAI-compatible HTTP API.
+//!
+//! ## Commands
+//!
+//! ```bash
+//! mullama serve       # Start the daemon server
+//! mullama chat        # Interactive TUI client
+//! mullama run "..."   # One-shot text generation
+//! mullama models      # List loaded models
+//! mullama load        # Load a model
+//! mullama unload      # Unload a model
+//! mullama status      # Show daemon status
+//! mullama cache       # Manage model cache
+//! mullama pull        # Download a model from HuggingFace
+//! ```
+//!
+//! ## HuggingFace Model Support
+//!
+//! ```bash
+//! # Download and serve HuggingFace models
+//! mullama serve --model hf:TheBloke/Llama-2-7B-GGUF:llama-2-7b.Q4_K_M.gguf
+//!
+//! # Auto-detect best quantization
+//! mullama serve --model hf:TheBloke/Llama-2-7B-GGUF
+//!
+//! # With custom alias
+//! mullama serve --model llama:hf:TheBloke/Llama-2-7B-GGUF
+//!
+//! # Pre-download model
+//! mullama pull hf:TheBloke/Llama-2-7B-GGUF
+//! ```
+
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use clap::{Parser, Subcommand};
+use mullama::daemon::{
+    create_openai_router, Daemon, DaemonBuilder, DaemonClient, TuiApp,
+    HfDownloader, HfModelSpec, resolve_model_path,
+    DEFAULT_HTTP_PORT, DEFAULT_SOCKET,
+};
+
+#[derive(Parser)]
+#[command(name = "mullama")]
+#[command(author, version, about = "Multi-model LLM server and client")]
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the daemon server
+    #[command(alias = "start")]
+    Serve {
+        /// Models to load (format: alias:path or just path)
+        /// Can be specified multiple times
+        #[arg(short, long, value_name = "SPEC")]
+        model: Vec<String>,
+
+        /// IPC socket address
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// HTTP port for OpenAI-compatible API (0 to disable)
+        #[arg(short = 'p', long, default_value_t = DEFAULT_HTTP_PORT)]
+        http_port: u16,
+
+        /// HTTP bind address
+        #[arg(long, default_value = "0.0.0.0")]
+        http_addr: String,
+
+        /// Default GPU layers to offload
+        #[arg(short, long, default_value = "0")]
+        gpu_layers: i32,
+
+        /// Default context size
+        #[arg(short, long, default_value = "4096")]
+        context_size: u32,
+
+        /// Threads per model
+        #[arg(short, long)]
+        threads: Option<i32>,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Interactive TUI chat client
+    #[command(alias = "tui")]
+    Chat {
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Connection timeout in seconds
+        #[arg(short, long, default_value = "10")]
+        timeout: u64,
+    },
+
+    /// One-shot text generation
+    Run {
+        /// The prompt to send
+        prompt: String,
+
+        /// Model to use (default: daemon's default model)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Maximum tokens to generate
+        #[arg(short = 'n', long, default_value = "256")]
+        max_tokens: u32,
+
+        /// Temperature for sampling
+        #[arg(short, long, default_value = "0.7")]
+        temperature: f32,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Show generation stats
+        #[arg(long)]
+        stats: bool,
+    },
+
+    /// List loaded models
+    Models {
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Load a model into the daemon
+    Load {
+        /// Model specification (format: alias:path or just path)
+        spec: String,
+
+        /// Number of GPU layers to offload
+        #[arg(short, long, default_value = "0")]
+        gpu_layers: i32,
+
+        /// Context size
+        #[arg(short, long, default_value = "4096")]
+        context_size: u32,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+    },
+
+    /// Unload a model from the daemon
+    Unload {
+        /// Model alias to unload
+        alias: String,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+    },
+
+    /// Set the default model
+    Default {
+        /// Model alias to set as default
+        alias: String,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+    },
+
+    /// Show daemon status
+    Status {
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Ping the daemon
+    Ping {
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+    },
+
+    /// Shutdown the daemon
+    Stop {
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Force shutdown even with active requests
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Tokenize text using a model
+    Tokenize {
+        /// Text to tokenize
+        text: String,
+
+        /// Model to use
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+    },
+
+    /// Download a model from HuggingFace
+    #[command(alias = "download")]
+    Pull {
+        /// Model specification (e.g., hf:TheBloke/Llama-2-7B-GGUF:model.Q4_K_M.gguf)
+        spec: String,
+
+        /// Quiet mode (no progress bar)
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Manage the model cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// List cached models
+    List {
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Show cache directory path
+    Path,
+
+    /// Show cache size
+    Size,
+
+    /// Remove a cached model
+    Remove {
+        /// Repository ID (e.g., TheBloke/Llama-2-7B-GGUF)
+        repo_id: String,
+
+        /// Filename to remove (if not specified, removes all files from repo)
+        #[arg(short, long)]
+        filename: Option<String>,
+    },
+
+    /// Clear all cached models
+    Clear {
+        /// Skip confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Serve {
+            model,
+            socket,
+            http_port,
+            http_addr,
+            gpu_layers,
+            context_size,
+            threads,
+            verbose,
+        } => {
+            run_server(
+                model,
+                socket,
+                http_port,
+                http_addr,
+                gpu_layers,
+                context_size,
+                threads,
+                verbose,
+            )
+            .await?;
+        }
+
+        Commands::Chat { socket, timeout } => {
+            run_chat(&socket, timeout)?;
+        }
+
+        Commands::Run {
+            prompt,
+            model,
+            max_tokens,
+            temperature,
+            socket,
+            stats,
+        } => {
+            run_prompt(&socket, &prompt, model.as_deref(), max_tokens, temperature, stats)?;
+        }
+
+        Commands::Models { socket, verbose } => {
+            list_models(&socket, verbose)?;
+        }
+
+        Commands::Load {
+            spec,
+            gpu_layers,
+            context_size,
+            socket,
+        } => {
+            load_model(&socket, &spec, gpu_layers, context_size)?;
+        }
+
+        Commands::Unload { alias, socket } => {
+            unload_model(&socket, &alias)?;
+        }
+
+        Commands::Default { alias, socket } => {
+            set_default(&socket, &alias)?;
+        }
+
+        Commands::Status { socket, json } => {
+            show_status(&socket, json)?;
+        }
+
+        Commands::Ping { socket } => {
+            ping_daemon(&socket)?;
+        }
+
+        Commands::Stop { socket, force: _ } => {
+            stop_daemon(&socket)?;
+        }
+
+        Commands::Tokenize {
+            text,
+            model,
+            socket,
+        } => {
+            tokenize_text(&socket, &text, model.as_deref())?;
+        }
+
+        Commands::Pull { spec, quiet } => {
+            pull_model(&spec, !quiet).await?;
+        }
+
+        Commands::Cache { action } => {
+            handle_cache_action(action).await?;
+        }
+    }
+
+    Ok(())
+}
+
+// ==================== Server ====================
+
+async fn run_server(
+    models: Vec<String>,
+    socket: String,
+    http_port: u16,
+    http_addr: String,
+    gpu_layers: i32,
+    context_size: u32,
+    threads: Option<i32>,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize backend
+    mullama::backend_init();
+
+    println!("Starting Mullama Daemon...");
+    println!("  IPC Socket: {}", socket);
+    if http_port > 0 {
+        println!("  HTTP API:   http://{}:{}", http_addr, http_port);
+    }
+    println!("  GPU Layers: {}", gpu_layers);
+    println!("  Context:    {}", context_size);
+    println!();
+
+    // Resolve model paths (download HF models if needed)
+    let mut resolved_models: Vec<(String, PathBuf)> = Vec::new();
+    for spec in &models {
+        if HfModelSpec::is_hf_spec(spec) {
+            println!("Resolving HuggingFace model: {}", spec);
+            match resolve_model_path(spec, true).await {
+                Ok((alias, path)) => {
+                    println!("  -> {} at {}", alias, path.display());
+                    resolved_models.push((alias, path));
+                }
+                Err(e) => {
+                    eprintln!("Failed to resolve {}: {}", spec, e);
+                    continue;
+                }
+            }
+        } else {
+            // Local path - parse alias:path format
+            let (alias, path) = if let Some(pos) = spec.find(':') {
+                let alias = &spec[..pos];
+                let path_str = &spec[pos + 1..];
+                // Check for Windows drive letter
+                if alias.len() == 1 && path_str.starts_with('\\') {
+                    let p = PathBuf::from(spec);
+                    let a = p.file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "model".to_string());
+                    (a, p)
+                } else {
+                    (alias.to_string(), PathBuf::from(path_str))
+                }
+            } else {
+                let p = PathBuf::from(spec);
+                let a = p.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "model".to_string());
+                (a, p)
+            };
+            resolved_models.push((alias, path));
+        }
+    }
+    println!();
+
+    // Build daemon configuration
+    let mut builder = DaemonBuilder::new()
+        .ipc_socket(&socket)
+        .default_gpu_layers(gpu_layers)
+        .default_context_size(context_size);
+
+    if http_port > 0 {
+        builder = builder.http_port(http_port).http_addr(&http_addr);
+    } else {
+        builder = builder.disable_http();
+    }
+
+    if let Some(t) = threads {
+        builder = builder.threads_per_model(t);
+    }
+
+    // Add resolved models
+    for (alias, path) in &resolved_models {
+        builder = builder.model(format!("{}:{}", alias, path.display()));
+    }
+
+    let (daemon, initial_models) = builder.build();
+    let daemon = std::sync::Arc::new(daemon);
+
+    // Load initial models
+    for config in initial_models {
+        print!("Loading model '{}'... ", config.alias);
+        io::stdout().flush()?;
+
+        match daemon.models.load(config.clone()).await {
+            Ok(info) => {
+                println!("OK");
+                if verbose {
+                    println!("    Path: {}", info.path);
+                    println!("    Parameters: {}M", info.parameters / 1_000_000);
+                    println!("    Context: {}", info.context_size);
+                }
+            }
+            Err(e) => {
+                println!("FAILED");
+                eprintln!("    Error: {}", e);
+            }
+        }
+    }
+
+    if resolved_models.is_empty() {
+        println!("No models specified. Use --model to load models.");
+        println!("You can also load models via the API or TUI.");
+        println!();
+        println!("Examples:");
+        println!("  mullama serve --model ./model.gguf");
+        println!("  mullama serve --model hf:TheBloke/Llama-2-7B-GGUF");
+        println!("  mullama serve --model llama:hf:TheBloke/Llama-2-7B-GGUF:llama-2-7b.Q4_K_M.gguf");
+    }
+
+    println!();
+    println!("Daemon ready. Press Ctrl+C to stop.");
+    println!();
+
+    // Start IPC server
+    let ipc_daemon = daemon.clone();
+    let ipc_socket = socket.clone();
+    let ipc_handle = tokio::spawn(async move {
+        if let Err(e) = run_ipc_server(ipc_daemon, &ipc_socket).await {
+            eprintln!("IPC server error: {}", e);
+        }
+    });
+
+    // Start HTTP server if enabled
+    let http_handle = if http_port > 0 {
+        let http_daemon = daemon.clone();
+        let addr = format!("{}:{}", http_addr, http_port);
+        Some(tokio::spawn(async move {
+            let router = create_openai_router(http_daemon);
+            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            if let Err(e) = axum::serve(listener, router).await {
+                eprintln!("HTTP server error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Wait for shutdown signal
+    tokio::signal::ctrl_c().await?;
+    println!("\nShutting down...");
+
+    // Signal shutdown
+    daemon.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Give servers time to cleanup
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Cleanup
+    mullama::backend_free();
+
+    Ok(())
+}
+
+async fn run_ipc_server(
+    daemon: std::sync::Arc<Daemon>,
+    addr: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use nng::{Protocol, Socket};
+    use mullama::daemon::{Request, Response};
+
+    let socket = Socket::new(Protocol::Rep0)?;
+    socket.listen(addr)?;
+
+    loop {
+        if daemon.is_shutdown() {
+            break;
+        }
+
+        // Non-blocking receive with timeout
+        match socket.recv() {
+            Ok(msg) => {
+                let request = match Request::from_bytes(&msg) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Invalid request: {}", e);
+                        continue;
+                    }
+                };
+
+                let response = daemon.handle_request(request).await;
+
+                let resp_bytes = match response.to_bytes() {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Serialization error: {}", e);
+                        continue;
+                    }
+                };
+
+                if let Err(e) = socket.send(nng::Message::from(resp_bytes.as_slice())) {
+                    eprintln!("Send error: {:?}", e);
+                }
+            }
+            Err(nng::Error::TimedOut) => {
+                continue;
+            }
+            Err(e) => {
+                if !daemon.is_shutdown() {
+                    eprintln!("Receive error: {}", e);
+                }
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ==================== Client Commands ====================
+
+fn connect(socket: &str) -> Result<DaemonClient, Box<dyn std::error::Error>> {
+    DaemonClient::connect_with_timeout(socket, Duration::from_secs(5))
+        .map_err(|e| format!("Failed to connect to daemon: {}\nIs the daemon running?", e).into())
+}
+
+fn run_chat(socket: &str, timeout: u64) -> Result<(), Box<dyn std::error::Error>> {
+    let client = DaemonClient::connect_with_timeout(socket, Duration::from_secs(timeout))?;
+
+    // Verify connection
+    match client.ping() {
+        Ok((uptime, version)) => {
+            println!("Connected to Mullama daemon v{} (uptime: {}s)", version, uptime);
+        }
+        Err(e) => {
+            eprintln!("Failed to connect: {}", e);
+            eprintln!("Make sure the daemon is running: mullama serve --model <path>");
+            return Err(e.into());
+        }
+    }
+
+    // Start TUI
+    let mut app = TuiApp::new(client);
+    app.run()?;
+
+    Ok(())
+}
+
+fn run_prompt(
+    socket: &str,
+    prompt: &str,
+    model: Option<&str>,
+    max_tokens: u32,
+    temperature: f32,
+    stats: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+    let result = client.chat(prompt, model, max_tokens, temperature)?;
+
+    println!("{}", result.text);
+
+    if stats {
+        eprintln!();
+        eprintln!(
+            "--- {} tokens in {}ms ({:.1} tok/s) using {} ---",
+            result.completion_tokens,
+            result.duration_ms,
+            result.tokens_per_second(),
+            result.model
+        );
+    }
+
+    Ok(())
+}
+
+fn list_models(socket: &str, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+    let models = client.list_models()?;
+
+    if models.is_empty() {
+        println!("No models loaded.");
+        println!("Use 'mullama load <path>' to load a model.");
+        return Ok(());
+    }
+
+    println!("Loaded models:\n");
+    for model in models {
+        let default_marker = if model.is_default { " (default)" } else { "" };
+        println!("  {}{}", model.alias, default_marker);
+
+        if verbose {
+            println!("    Path:       {}", model.info.path);
+            println!("    Parameters: {}M", model.info.parameters / 1_000_000);
+            println!("    Context:    {}", model.info.context_size);
+            println!("    GPU layers: {}", model.info.gpu_layers);
+            if model.active_requests > 0 {
+                println!("    Active:     {} requests", model.active_requests);
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn load_model(
+    socket: &str,
+    spec: &str,
+    gpu_layers: i32,
+    context_size: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+
+    // Parse spec
+    let (alias, path) = if let Some(pos) = spec.find(':') {
+        (spec[..pos].to_string(), spec[pos + 1..].to_string())
+    } else {
+        let p = std::path::Path::new(spec);
+        let alias = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "model".to_string());
+        (alias, spec.to_string())
+    };
+
+    print!("Loading model '{}'... ", alias);
+    io::stdout().flush()?;
+
+    match client.load_model_with_options(&alias, &path, gpu_layers, context_size) {
+        Ok((alias, info)) => {
+            println!("OK");
+            println!("  Parameters: {}M", info.parameters / 1_000_000);
+            println!("  Context:    {}", info.context_size);
+        }
+        Err(e) => {
+            println!("FAILED");
+            eprintln!("Error: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn unload_model(socket: &str, alias: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+
+    print!("Unloading model '{}'... ", alias);
+    io::stdout().flush()?;
+
+    match client.unload_model(alias) {
+        Ok(()) => println!("OK"),
+        Err(e) => {
+            println!("FAILED");
+            eprintln!("Error: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn set_default(socket: &str, alias: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+
+    match client.set_default_model(alias) {
+        Ok(()) => println!("Default model set to '{}'", alias),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+
+    Ok(())
+}
+
+fn show_status(socket: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+    let status = client.status()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        println!("Mullama Daemon Status");
+        println!("=====================");
+        println!("Version:         {}", status.version);
+        println!("Uptime:          {}s", status.uptime_secs);
+        println!("Models loaded:   {}", status.models_loaded);
+        if let Some(ref default) = status.default_model {
+            println!("Default model:   {}", default);
+        }
+        if let Some(ref http) = status.http_endpoint {
+            println!("HTTP endpoint:   {}", http);
+        }
+        println!("IPC endpoint:    {}", status.ipc_endpoint);
+        println!();
+        println!("Statistics:");
+        println!("  Total requests:   {}", status.stats.requests_total);
+        println!("  Tokens generated: {}", status.stats.tokens_generated);
+        println!("  Active requests:  {}", status.stats.active_requests);
+        println!("  GPU available:    {}", status.stats.gpu_available);
+    }
+
+    Ok(())
+}
+
+fn ping_daemon(socket: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let start = std::time::Instant::now();
+    let client = connect(socket)?;
+    let (uptime, version) = client.ping()?;
+    let latency = start.elapsed();
+
+    println!("Pong from mullama v{}", version);
+    println!("  Daemon uptime: {}s", uptime);
+    println!("  Round-trip:    {:?}", latency);
+
+    Ok(())
+}
+
+fn stop_daemon(socket: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+
+    print!("Shutting down daemon... ");
+    io::stdout().flush()?;
+
+    match client.shutdown() {
+        Ok(()) => println!("OK"),
+        Err(e) => {
+            println!("FAILED");
+            eprintln!("Error: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn tokenize_text(
+    socket: &str,
+    text: &str,
+    model: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+    let tokens = client.tokenize(text, model)?;
+
+    println!("Tokens ({}): {:?}", tokens.len(), tokens);
+
+    Ok(())
+}
+
+// ==================== HuggingFace / Cache Commands ====================
+
+async fn pull_model(spec: &str, show_progress: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let hf_spec = HfModelSpec::parse(spec).ok_or_else(|| {
+        format!(
+            "Invalid HuggingFace spec: {}\n\
+             Expected format: hf:owner/repo:filename.gguf or hf:owner/repo",
+            spec
+        )
+    })?;
+
+    let downloader = HfDownloader::new()?;
+
+    println!("Downloading from HuggingFace...");
+    println!("  Repository: {}", hf_spec.repo_id);
+
+    if let Some(ref filename) = hf_spec.filename {
+        println!("  File: {}", filename);
+    } else {
+        println!("  File: (auto-detecting best GGUF)");
+    }
+    println!();
+
+    let path = downloader.download_spec(&hf_spec, show_progress).await?;
+
+    println!();
+    println!("Model downloaded successfully!");
+    println!("  Path: {}", path.display());
+    println!();
+    println!("To use this model:");
+    println!("  mullama serve --model {}:{}", hf_spec.get_alias(), path.display());
+
+    Ok(())
+}
+
+async fn handle_cache_action(action: CacheAction) -> Result<(), Box<dyn std::error::Error>> {
+    let downloader = HfDownloader::new()?;
+
+    match action {
+        CacheAction::List { verbose } => {
+            let models = downloader.list_cached();
+
+            if models.is_empty() {
+                println!("No cached models.");
+                println!();
+                println!("Download models with:");
+                println!("  mullama pull hf:TheBloke/Llama-2-7B-GGUF");
+                return Ok(());
+            }
+
+            println!("Cached models:\n");
+            for model in models {
+                println!("  {} / {}", model.repo_id, model.filename);
+                if verbose {
+                    println!("    Path: {}", model.local_path.display());
+                    println!("    Size: {:.2} GB", model.size_bytes as f64 / 1_073_741_824.0);
+                    println!("    Downloaded: {}", model.downloaded_at);
+                    println!();
+                }
+            }
+
+            if !verbose {
+                println!();
+                println!("Use --verbose for more details.");
+            }
+        }
+
+        CacheAction::Path => {
+            println!("{}", downloader.cache_dir().display());
+        }
+
+        CacheAction::Size => {
+            let size = downloader.cache_size();
+            let models = downloader.list_cached();
+
+            println!("Cache size: {:.2} GB", size as f64 / 1_073_741_824.0);
+            println!("Models cached: {}", models.len());
+            println!("Cache directory: {}", downloader.cache_dir().display());
+        }
+
+        CacheAction::Remove { repo_id, filename } => {
+            if let Some(filename) = filename {
+                print!("Removing {} / {}... ", repo_id, filename);
+                io::stdout().flush()?;
+                downloader.remove_cached(&repo_id, &filename)?;
+                println!("OK");
+            } else {
+                // Remove all files from repo
+                let models = downloader.list_cached();
+                let to_remove: Vec<_> = models
+                    .iter()
+                    .filter(|m| m.repo_id == repo_id)
+                    .collect();
+
+                if to_remove.is_empty() {
+                    println!("No cached files found for {}", repo_id);
+                    return Ok(());
+                }
+
+                for model in to_remove {
+                    print!("Removing {}... ", model.filename);
+                    io::stdout().flush()?;
+                    downloader.remove_cached(&model.repo_id, &model.filename)?;
+                    println!("OK");
+                }
+            }
+        }
+
+        CacheAction::Clear { force } => {
+            if !force {
+                let models = downloader.list_cached();
+                let size = downloader.cache_size();
+
+                println!("This will remove {} models ({:.2} GB).", models.len(), size as f64 / 1_073_741_824.0);
+                print!("Are you sure? [y/N] ");
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            print!("Clearing cache... ");
+            io::stdout().flush()?;
+            downloader.clear_cache()?;
+            println!("OK");
+        }
+    }
+
+    Ok(())
+}
