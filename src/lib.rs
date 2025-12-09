@@ -368,7 +368,7 @@ pub use multimodal::{
 #[cfg(feature = "parallel")]
 pub use parallel::{BatchGenerationConfig, GenerationResult, ParallelProcessor, ThreadPoolConfig};
 #[cfg(feature = "streaming")]
-pub use streaming::{StreamConfig, TokenData, TokenStream};
+pub use streaming::{StreamConfig, TokenData as StreamTokenData, TokenStream};
 #[cfg(feature = "streaming-audio")]
 pub use streaming_audio::{
     AudioChunk, AudioStream, AudioStreamConfig, DevicePreference, StreamingAudioProcessor,
@@ -417,7 +417,7 @@ pub mod prelude {
     pub use crate::{AsyncContext, AsyncModel};
 
     #[cfg(feature = "streaming")]
-    pub use crate::{StreamConfig, TokenData, TokenStream};
+    pub use crate::{StreamConfig, StreamTokenData, TokenStream};
 
     #[cfg(feature = "web")]
     pub use crate::{AppState, GenerateRequest, GenerateResponse, RouterBuilder};

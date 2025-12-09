@@ -43,14 +43,12 @@ use futures::{Stream, StreamExt};
 #[cfg(feature = "streaming")]
 use std::pin::Pin;
 #[cfg(feature = "streaming")]
-use std::sync::Arc;
-#[cfg(feature = "streaming")]
 use std::task::{Context as TaskContext, Poll};
 #[cfg(feature = "streaming")]
 use tokio::sync::mpsc;
 
 #[cfg(feature = "async")]
-use crate::async_support::AsyncModel;
+use crate::async_support::{AsyncContext, AsyncModel};
 use crate::{ContextParams, MullamaError, SamplerParams, TokenId};
 
 /// Data emitted by token streams
@@ -213,7 +211,7 @@ impl TokenStream {
         let sampler = config.sampler_params.build_chain(model.model().clone())?;
 
         // Tokenize prompt
-        let tokens = model.model().tokenize(&prompt, true, false)?;
+        let _tokens = model.model().tokenize(&prompt, true, false)?;
 
         let handle = tokio::spawn(async move {
             let mut sampler = sampler;
@@ -231,7 +229,7 @@ impl TokenStream {
                     sampler.accept(token);
 
                     // Recreate async context (simplified for example)
-                    context = AsyncContext::from_context(temp_context, model.model().clone());
+                    context = AsyncContext::new(temp_context, model.model().clone());
                     token
                 };
 
@@ -337,25 +335,6 @@ impl Stream for TokenStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
         self.receiver.poll_recv(cx)
-    }
-}
-
-/// Simplified AsyncContext for streaming (would need proper implementation)
-#[cfg(feature = "streaming")]
-struct AsyncContext {
-    _model: Arc<crate::Model>,
-    // This is a simplified placeholder
-}
-
-#[cfg(feature = "streaming")]
-impl AsyncContext {
-    fn from_context(_context: crate::Context, model: Arc<crate::Model>) -> Self {
-        Self { _model: model }
-    }
-
-    fn into_inner(self) -> crate::Context {
-        // Placeholder implementation
-        panic!("This is a placeholder implementation")
     }
 }
 
