@@ -65,6 +65,10 @@ enum Commands {
         #[arg(short, long, value_name = "SPEC")]
         model: Vec<String>,
 
+        /// Path to multimodal projector for vision models (applies to first model)
+        #[arg(long)]
+        mmproj: Option<PathBuf>,
+
         /// IPC socket address
         #[arg(short, long, default_value = DEFAULT_SOCKET)]
         socket: String,
@@ -127,6 +131,14 @@ enum Commands {
         #[arg(short, long, default_value = DEFAULT_SOCKET)]
         socket: String,
 
+        /// Image file for vision models
+        #[arg(short, long)]
+        image: Option<PathBuf>,
+
+        /// HTTP port for vision requests (uses HTTP API instead of IPC)
+        #[arg(long, default_value = "8080")]
+        http_port: u16,
+
         /// Show generation stats
         #[arg(long)]
         stats: bool,
@@ -155,6 +167,10 @@ enum Commands {
         /// Context size
         #[arg(short, long, default_value = "4096")]
         context_size: u32,
+
+        /// Path to multimodal projector for vision models (mmproj.gguf)
+        #[arg(long)]
+        mmproj: Option<PathBuf>,
 
         /// IPC socket to connect to
         #[arg(short, long, default_value = DEFAULT_SOCKET)]
@@ -307,6 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Serve {
             model,
+            mmproj,
             socket,
             http_port,
             http_addr,
@@ -317,6 +334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             run_server(
                 model,
+                mmproj,
                 socket,
                 http_port,
                 http_addr,
@@ -338,16 +356,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tokens,
             temperature,
             socket,
+            image,
+            http_port,
             stats,
         } => {
-            run_prompt(
-                &socket,
-                &prompt,
-                model.as_deref(),
-                max_tokens,
-                temperature,
-                stats,
-            )?;
+            if image.is_some() {
+                run_vision_prompt(
+                    http_port,
+                    &prompt,
+                    model.as_deref(),
+                    max_tokens,
+                    temperature,
+                    image.as_ref().unwrap(),
+                    stats,
+                )
+                .await?;
+            } else {
+                run_prompt(
+                    &socket,
+                    &prompt,
+                    model.as_deref(),
+                    max_tokens,
+                    temperature,
+                    stats,
+                )?;
+            }
         }
 
         Commands::Models { socket, verbose } => {
@@ -358,9 +391,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             spec,
             gpu_layers,
             context_size,
+            mmproj,
             socket,
         } => {
-            load_model(&socket, &spec, gpu_layers, context_size)?;
+            load_model(&socket, &spec, gpu_layers, context_size, mmproj)?;
         }
 
         Commands::Unload { alias, socket } => {
@@ -420,6 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_server(
     models: Vec<String>,
+    mmproj: Option<PathBuf>,
     socket: String,
     http_port: u16,
     http_addr: String,
@@ -438,6 +473,9 @@ async fn run_server(
     }
     println!("  GPU Layers: {}", gpu_layers);
     println!("  Context:    {}", context_size);
+    if let Some(ref mmp) = mmproj {
+        println!("  MMProj:     {}", mmp.display());
+    }
     println!();
 
     // Resolve model paths (download HF models if needed)
@@ -505,8 +543,15 @@ async fn run_server(
         builder = builder.model(format!("{}:{}", alias, path.display()));
     }
 
-    let (daemon, initial_models) = builder.build();
+    let (daemon, mut initial_models) = builder.build();
     let daemon = std::sync::Arc::new(daemon);
+
+    // Apply mmproj to the first model if specified
+    if let Some(ref mmp) = mmproj {
+        if let Some(first) = initial_models.first_mut() {
+            first.mmproj_path = Some(mmp.display().to_string());
+        }
+    }
 
     // Load initial models
     for config in initial_models {
@@ -701,6 +746,99 @@ fn run_prompt(
     Ok(())
 }
 
+/// Run vision prompt using HTTP API
+async fn run_vision_prompt(
+    http_port: u16,
+    prompt: &str,
+    model: Option<&str>,
+    max_tokens: u32,
+    temperature: f32,
+    image_path: &PathBuf,
+    stats: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use base64::Engine;
+
+    let start = std::time::Instant::now();
+
+    // Read and encode image
+    let image_data = std::fs::read(image_path)
+        .map_err(|e| format!("Failed to read image file '{}': {}", image_path.display(), e))?;
+
+    // Detect image type from extension
+    let mime_type = match image_path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg", // Default to JPEG
+    };
+
+    let base64_image = base64::engine::general_purpose::STANDARD.encode(&image_data);
+    let image_url = format!("data:{};base64,{}", mime_type, base64_image);
+
+    // Build OpenAI vision API request
+    let request_body = serde_json::json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ]
+        }],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": false
+    });
+
+    // Send request to HTTP API
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/v1/chat/completions", http_port);
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to daemon at {}: {}", url, e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(format!("Vision request failed ({}): {}", status, error_text).into());
+    }
+
+    // Parse response
+    let resp_json: serde_json::Value = response.json().await?;
+
+    let text = resp_json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("(no response)");
+
+    println!("{}", text);
+
+    if stats {
+        let duration = start.elapsed();
+        let completion_tokens = resp_json["usage"]["completion_tokens"]
+            .as_u64()
+            .unwrap_or(0);
+        let model_used = resp_json["model"].as_str().unwrap_or("unknown");
+
+        eprintln!();
+        eprintln!(
+            "--- {} tokens in {}ms ({:.1} tok/s) using {} ---",
+            completion_tokens,
+            duration.as_millis(),
+            completion_tokens as f64 / duration.as_secs_f64(),
+            model_used
+        );
+    }
+
+    Ok(())
+}
+
 fn list_models(socket: &str, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     let client = connect(socket)?;
     let models = client.list_models()?;
@@ -736,7 +874,15 @@ fn load_model(
     spec: &str,
     gpu_layers: i32,
     context_size: u32,
+    mmproj: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if mmproj.is_some() {
+        eprintln!("Warning: --mmproj is not yet supported via IPC protocol.");
+        eprintln!("         Vision models can be loaded directly via the server:");
+        eprintln!("         mullama serve --model model.gguf (with mmproj support coming soon)");
+        eprintln!();
+    }
+
     let client = connect(socket)?;
 
     // Parse spec

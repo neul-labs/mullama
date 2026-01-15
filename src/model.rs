@@ -591,6 +591,50 @@ impl Model {
         }
     }
 
+    /// Extract stop sequences from the model's chat template
+    ///
+    /// Returns common end-of-turn markers found in the template that should
+    /// be used as stop sequences during generation.
+    pub fn get_chat_stop_sequences(&self) -> Vec<String> {
+        let template = match self.chat_template() {
+            Some(t) => t,
+            None => return vec![],
+        };
+
+        let mut stops = Vec::new();
+
+        // ChatML/Qwen style (with and without angle brackets)
+        if template.contains("<|im_end|>") {
+            stops.push("<|im_end|>".to_string());
+            // Some models generate without outer angle brackets
+            stops.push("|im_end|".to_string());
+        }
+        // Llama 3 style
+        if template.contains("<|eot_id|>") {
+            stops.push("<|eot_id|>".to_string());
+        }
+        if template.contains("<|eom_id|>") {
+            stops.push("<|eom_id|>".to_string());
+        }
+        // Generic end tokens
+        if template.contains("<|end|>") {
+            stops.push("<|end|>".to_string());
+        }
+        if template.contains("<|endoftext|>") {
+            stops.push("<|endoftext|>".to_string());
+        }
+        // Gemma style
+        if template.contains("<end_of_turn>") {
+            stops.push("<end_of_turn>".to_string());
+        }
+        // Mistral style
+        if template.contains("[/INST]") && template.contains("</s>") {
+            stops.push("</s>".to_string());
+        }
+
+        stops
+    }
+
     /// Apply a chat template to format messages
     ///
     /// # Arguments

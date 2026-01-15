@@ -1331,6 +1331,8 @@ pub struct MtmdContext {
 }
 
 unsafe impl Send for MtmdContext {}
+// Safety: Access is synchronized through RwLock in the daemon
+unsafe impl Sync for MtmdContext {}
 
 impl MtmdContext {
     /// Create a new multimodal context
@@ -1629,16 +1631,8 @@ mod tests {
 
     #[test]
     fn test_modality_support() {
-        let config = MultimodalConfig::default();
-        // Placeholder for test model
-        return; // Skip test
-
-        // Test with vision encoder
-        let processor_result = MultimodalProcessor::new(text_model.clone(), None, config.clone());
-        if let Ok(processor) = processor_result {
-            assert!(processor.supports_modality(Modality::Text));
-            assert!(!processor.supports_modality(Modality::Image));
-        }
+        let _config = MultimodalConfig::default();
+        // Placeholder for test model - skip for now as we don't have a model in tests
     }
 
     #[test]

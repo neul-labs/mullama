@@ -38,7 +38,7 @@ web = ["async", "axum", "tower", "tower-http"]
 websockets = ["async", "axum", "tokio-tungstenite"]
 parallel = ["rayon"]
 tokio-runtime = ["tokio", "tokio-util"]
-daemon = ["async", "tokio-runtime", "web", "nng", "ratatui", "crossterm", "clap", "reqwest", "indicatif", "urlencoding", "tokio-stream"]
+daemon = ["async", "tokio-runtime", "web", "nng", "ratatui", "crossterm", "clap", "reqwest", "indicatif", "urlencoding", "tokio-stream", "base64"]
 windows-optimization = ["windows"]
 macos-optimization = ["core-foundation", "coreaudio-rs"]
 full = ["async", "streaming", "web", "websockets", "multimodal", "parallel", "tokio-runtime", "format-conversion", "streaming-audio", "daemon"]
@@ -103,6 +103,9 @@ clap = { version = "4.5", features = ["derive"], optional = true }
 reqwest = { version = "0.11", features = ["stream", "json"], optional = true }
 indicatif = { version = "0.17", optional = true }
 urlencoding = { version = "2.1", optional = true }
+
+# Base64 encoding/decoding (for image data URIs)
+base64 = { version = "0.22", optional = true }
 
 # Platform-specific dependencies
 [target.'cfg(windows)'.dependencies]

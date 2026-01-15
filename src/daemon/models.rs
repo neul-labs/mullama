@@ -9,9 +9,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::protocol::ModelInfo;
-use crate::{
-    Context, ContextParams, Model, ModelParams, MullamaError, SamplerChain, SamplerParams,
-};
+use crate::{Context, ContextParams, Model, ModelParams, MullamaError};
+
+#[cfg(feature = "multimodal")]
+use crate::{MtmdContext, MtmdParams};
 
 /// A loaded model instance with its context
 pub struct LoadedModel {
@@ -20,10 +21,33 @@ pub struct LoadedModel {
     pub context: RwLock<Context>,
     pub info: ModelInfo,
     pub active_requests: AtomicU32,
+    /// Multimodal context for vision/audio models (requires mmproj file)
+    #[cfg(feature = "multimodal")]
+    pub mtmd_context: Option<RwLock<MtmdContext>>,
 }
 
 impl LoadedModel {
     /// Create a new loaded model
+    #[cfg(feature = "multimodal")]
+    pub fn new(
+        alias: String,
+        model: Arc<Model>,
+        context: Context,
+        info: ModelInfo,
+        mtmd_context: Option<MtmdContext>,
+    ) -> Self {
+        Self {
+            alias,
+            model,
+            context: RwLock::new(context),
+            info,
+            active_requests: AtomicU32::new(0),
+            mtmd_context: mtmd_context.map(RwLock::new),
+        }
+    }
+
+    /// Create a new loaded model (non-multimodal build)
+    #[cfg(not(feature = "multimodal"))]
     pub fn new(alias: String, model: Arc<Model>, context: Context, info: ModelInfo) -> Self {
         Self {
             alias,
@@ -32,6 +56,17 @@ impl LoadedModel {
             info,
             active_requests: AtomicU32::new(0),
         }
+    }
+
+    /// Check if this model has multimodal (vision/audio) support
+    #[cfg(feature = "multimodal")]
+    pub fn has_multimodal(&self) -> bool {
+        self.mtmd_context.is_some()
+    }
+
+    #[cfg(not(feature = "multimodal"))]
+    pub fn has_multimodal(&self) -> bool {
+        false
     }
 
     /// Increment active request count
@@ -58,6 +93,8 @@ pub struct ModelLoadConfig {
     pub gpu_layers: i32,
     pub context_size: u32,
     pub threads: i32,
+    /// Path to multimodal projector file (mmproj) for vision/audio models
+    pub mmproj_path: Option<String>,
 }
 
 impl ModelLoadConfig {
@@ -68,6 +105,7 @@ impl ModelLoadConfig {
             gpu_layers: 0,
             context_size: 4096,
             threads: num_cpus::get() as i32,
+            mmproj_path: None,
         }
     }
 
@@ -83,6 +121,12 @@ impl ModelLoadConfig {
 
     pub fn threads(mut self, threads: i32) -> Self {
         self.threads = threads;
+        self
+    }
+
+    /// Set the multimodal projector path for vision/audio models
+    pub fn mmproj(mut self, path: impl Into<String>) -> Self {
+        self.mmproj_path = Some(path.into());
         self
     }
 }
@@ -140,6 +184,39 @@ impl ModelManager {
             quantization: None, // TODO: detect from model
         };
 
+        // Create multimodal context if mmproj path provided
+        #[cfg(feature = "multimodal")]
+        let mtmd_context = if let Some(ref mmproj_path) = config.mmproj_path {
+            let mut mtmd_params = MtmdParams::default();
+            mtmd_params.n_threads = config.threads;
+            match MtmdContext::new(mmproj_path, &model, mtmd_params) {
+                Ok(ctx) => {
+                    eprintln!(
+                        "  Multimodal: vision={}, audio={}",
+                        ctx.supports_vision(),
+                        ctx.supports_audio()
+                    );
+                    Some(ctx)
+                }
+                Err(e) => {
+                    eprintln!("  Warning: Failed to load mmproj: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        #[cfg(feature = "multimodal")]
+        let loaded = Arc::new(LoadedModel::new(
+            config.alias.clone(),
+            model,
+            context,
+            info.clone(),
+            mtmd_context,
+        ));
+
+        #[cfg(not(feature = "multimodal"))]
         let loaded = Arc::new(LoadedModel::new(
             config.alias.clone(),
             model,

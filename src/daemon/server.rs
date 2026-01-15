@@ -234,9 +234,13 @@ impl Daemon {
         let prompt = self.build_chat_prompt(&loaded.model, &messages);
         let model_alias = loaded.alias.clone();
 
+        // Get stop sequences from chat template and merge with user-provided ones
+        let mut all_stops = loaded.model.get_chat_stop_sequences();
+        all_stops.extend(stop);
+
         // Start streaming generation
         match self
-            .generate_text_streaming(loaded, prompt, max_tokens, temperature, stop)
+            .generate_text_streaming(loaded, prompt, max_tokens, temperature, all_stops)
             .await
         {
             Ok((rx, prompt_tokens, request_id)) => {
@@ -267,9 +271,13 @@ impl Daemon {
         // Build prompt from messages using model's chat template
         let prompt = self.build_chat_prompt(&loaded.model, &messages);
 
+        // Get stop sequences from chat template and merge with user-provided ones
+        let mut all_stops = loaded.model.get_chat_stop_sequences();
+        all_stops.extend(stop);
+
         // Generate
         let result = self
-            .generate_text(&loaded, &prompt, max_tokens, temperature, &stop)
+            .generate_text(&loaded, &prompt, max_tokens, temperature, &all_stops)
             .await;
 
         self.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -290,7 +298,7 @@ impl Daemon {
                         index: 0,
                         message: ChatMessage {
                             role: "assistant".to_string(),
-                            content: text,
+                            content: text.into(),
                             name: None,
                         },
                         finish_reason: Some("stop".to_string()),
@@ -356,6 +364,481 @@ impl Daemon {
         }
     }
 
+    /// Handle vision chat completion (images + text)
+    #[cfg(feature = "multimodal")]
+    pub async fn handle_vision_chat_completion(
+        &self,
+        model: Option<String>,
+        messages: Vec<ChatMessage>,
+        max_tokens: u32,
+        temperature: f32,
+        stop: Vec<String>,
+    ) -> Response {
+        use base64::Engine;
+        use crate::{Bitmap, MtmdContext};
+
+        // Get model
+        let loaded = match self.models.get(model.as_deref()).await {
+            Ok(m) => m,
+            Err(e) => return Response::error(ErrorCode::ModelNotFound, e.to_string()),
+        };
+
+        // Check if model has multimodal support
+        if !loaded.has_multimodal() {
+            return Response::error(
+                ErrorCode::InvalidRequest,
+                "Model does not have multimodal support. Load with --mmproj to enable vision.",
+            );
+        }
+
+        let _guard = RequestGuard::new(loaded.clone());
+        self.active_requests.fetch_add(1, Ordering::Relaxed);
+
+        // Extract images from messages and decode base64
+        let mut bitmaps: Vec<Bitmap> = Vec::new();
+        let mtmd_guard = loaded.mtmd_context.as_ref().unwrap().read().await;
+
+        for msg in &messages {
+            for img_url in msg.content.images() {
+                // Parse data URI: data:image/jpeg;base64,/9j/4AAQ...
+                let url = &img_url.url;
+                if let Some(base64_data) = url.strip_prefix("data:").and_then(|s| {
+                    // Find the base64 part after the comma
+                    s.split_once(',').map(|(_, data)| data)
+                }) {
+                    // Decode base64
+                    match base64::engine::general_purpose::STANDARD.decode(base64_data) {
+                        Ok(image_bytes) => {
+                            // Create bitmap from decoded image data
+                            match mtmd_guard.bitmap_from_buffer(&image_bytes) {
+                                Ok(bitmap) => bitmaps.push(bitmap),
+                                Err(e) => {
+                                    self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                                    return Response::error(
+                                        ErrorCode::InvalidRequest,
+                                        format!("Failed to load image: {}", e),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                            return Response::error(
+                                ErrorCode::InvalidRequest,
+                                format!("Invalid base64 image data: {}", e),
+                            );
+                        }
+                    }
+                } else {
+                    self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                    return Response::error(
+                        ErrorCode::InvalidRequest,
+                        "Image URL must be a base64 data URI (data:image/...;base64,...)",
+                    );
+                }
+            }
+        }
+
+        drop(mtmd_guard);
+
+        // Build prompt with <__media__> markers for images
+        // For VLMs, we need to place image markers where images should be processed
+        let prompt = self.build_vision_prompt(&loaded.model, &messages);
+
+        // Get stop sequences
+        let mut all_stops = loaded.model.get_chat_stop_sequences();
+        all_stops.extend(stop);
+
+        // Process with multimodal context
+        let result = self
+            .generate_vision_text(&loaded, &prompt, &bitmaps, max_tokens, temperature, &all_stops)
+            .await;
+
+        self.active_requests.fetch_sub(1, Ordering::Relaxed);
+
+        match result {
+            Ok((text, prompt_tokens, completion_tokens)) => {
+                let created = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                Response::ChatCompletion(ChatCompletionResponse {
+                    id: generate_completion_id(),
+                    object: "chat.completion".to_string(),
+                    created,
+                    model: loaded.alias.clone(),
+                    choices: vec![ChatChoice {
+                        index: 0,
+                        message: ChatMessage {
+                            role: "assistant".to_string(),
+                            content: text.into(),
+                            name: None,
+                        },
+                        finish_reason: Some("stop".to_string()),
+                    }],
+                    usage: Usage {
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens: prompt_tokens + completion_tokens,
+                    },
+                })
+            }
+            Err(e) => Response::error(ErrorCode::GenerationFailed, e.to_string()),
+        }
+    }
+
+    /// Build prompt for vision models with image markers
+    #[cfg(feature = "multimodal")]
+    fn build_vision_prompt(&self, model: &crate::Model, messages: &[ChatMessage]) -> String {
+        // Extract text content, replacing images with <__media__> markers
+        let mut processed_messages: Vec<(String, String)> = Vec::new();
+
+        for msg in messages {
+            let mut content = String::new();
+            match &msg.content {
+                MessageContent::Text(s) => content = s.clone(),
+                MessageContent::Parts(parts) => {
+                    for part in parts {
+                        match part {
+                            ContentPart::Text { text } => content.push_str(text),
+                            ContentPart::ImageUrl { .. } => {
+                                // Insert media marker where image should go
+                                content.push_str("<__media__>");
+                            }
+                        }
+                    }
+                }
+            }
+            processed_messages.push((msg.role.clone(), content));
+        }
+
+        // Try to use the model's built-in chat template
+        let msg_tuples: Vec<(&str, &str)> = processed_messages
+            .iter()
+            .map(|(role, content)| (role.as_str(), content.as_str()))
+            .collect();
+
+        match model.apply_chat_template(None, &msg_tuples, true) {
+            Ok(formatted) => formatted,
+            Err(_) => {
+                // Fallback to simple format
+                let mut prompt = String::new();
+                for (role, content) in &processed_messages {
+                    match role.as_str() {
+                        "system" => prompt.push_str(&format!("System: {}\n\n", content)),
+                        "user" => prompt.push_str(&format!("User: {}\n\n", content)),
+                        "assistant" => prompt.push_str(&format!("Assistant: {}\n\n", content)),
+                        _ => prompt.push_str(&format!("{}: {}\n\n", role, content)),
+                    }
+                }
+                prompt.push_str("Assistant:");
+                prompt
+            }
+        }
+    }
+
+    /// Generate text with vision input
+    #[cfg(feature = "multimodal")]
+    async fn generate_vision_text(
+        &self,
+        loaded: &super::models::LoadedModel,
+        prompt: &str,
+        bitmaps: &[crate::Bitmap],
+        max_tokens: u32,
+        temperature: f32,
+        stop_sequences: &[String],
+    ) -> Result<(String, u32, u32), MullamaError> {
+        // Get locks on context and mtmd_context
+        let mut ctx_guard = loaded.context.write().await;
+        let mut mtmd_guard = loaded.mtmd_context.as_ref().unwrap().write().await;
+
+        let model = loaded.model.clone();
+        let stop_sequences = stop_sequences.to_vec();
+
+        // Run CPU-bound generation in blocking context
+        let (generated, prompt_tokens, completion_tokens) = tokio::task::block_in_place(|| {
+            // Clear KV cache
+            ctx_guard.kv_cache_clear();
+
+            // Create bitmap references for tokenize
+            let bitmap_refs: Vec<&crate::Bitmap> = bitmaps.iter().collect();
+
+            // Tokenize the prompt with images
+            let chunks = mtmd_guard.tokenize(prompt, &bitmap_refs)?;
+
+            // Evaluate chunks (processes both text and images)
+            // Use a reasonable default batch size
+            let n_batch = 512;
+            let n_past = mtmd_guard.eval_chunks(&mut ctx_guard, &chunks, 0, 0, n_batch, true)?;
+
+            let prompt_tokens = n_past as u32;
+
+            // Set up sampler
+            let mut sampler_params = SamplerParams::default();
+            sampler_params.temperature = temperature;
+            sampler_params.top_p = 0.9;
+            sampler_params.top_k = 40;
+            let mut sampler = sampler_params.build_chain(model.clone())?;
+
+            // Generate tokens
+            let mut generated = String::with_capacity((max_tokens as usize) * 6);
+            let mut completion_tokens = 0u32;
+
+            for _ in 0..max_tokens {
+                // Sample next token
+                let next_token = sampler.sample(&mut *ctx_guard, -1);
+
+                // Check for end of generation
+                if model.vocab_is_eog(next_token) {
+                    break;
+                }
+
+                // Get token text
+                if let Ok(text) = model.token_to_str(next_token, 0, false) {
+                    generated.push_str(&text);
+
+                    // Check for stop sequences
+                    if !stop_sequences.is_empty() {
+                        for stop in &stop_sequences {
+                            if let Some(pos) = generated.find(stop) {
+                                generated.truncate(pos);
+                                return Ok((generated, prompt_tokens, completion_tokens));
+                            }
+                        }
+                    }
+                }
+
+                // Accept the token and evaluate
+                sampler.accept(next_token);
+                ctx_guard.decode_single(next_token)?;
+                completion_tokens += 1;
+            }
+
+            Ok::<_, MullamaError>((generated, prompt_tokens, completion_tokens))
+        })?;
+
+        self.models.add_tokens(completion_tokens as u64);
+
+        Ok((generated, prompt_tokens, completion_tokens))
+    }
+
+    /// Handle streaming vision chat completion
+    #[cfg(feature = "multimodal")]
+    pub async fn handle_vision_chat_completion_streaming(
+        &self,
+        model: Option<String>,
+        messages: Vec<ChatMessage>,
+        max_tokens: u32,
+        temperature: f32,
+        stop: Vec<String>,
+    ) -> Result<
+        (
+            mpsc::Receiver<StreamChunk>,
+            u32,
+            String,
+            String,
+        ),
+        Response,
+    > {
+        use base64::Engine;
+        use crate::Bitmap;
+
+        // Get model
+        let loaded = match self.models.get(model.as_deref()).await {
+            Ok(m) => m,
+            Err(e) => return Err(Response::error(ErrorCode::ModelNotFound, e.to_string())),
+        };
+
+        // Check if model has multimodal support
+        if !loaded.has_multimodal() {
+            return Err(Response::error(
+                ErrorCode::InvalidRequest,
+                "Model does not have multimodal support. Load with --mmproj to enable vision.",
+            ));
+        }
+
+        let _guard = RequestGuard::new(loaded.clone());
+        self.active_requests.fetch_add(1, Ordering::Relaxed);
+
+        // Extract and decode images
+        let mut bitmaps: Vec<Bitmap> = Vec::new();
+        {
+            let mtmd_guard = loaded.mtmd_context.as_ref().unwrap().read().await;
+
+            for msg in &messages {
+                for img_url in msg.content.images() {
+                    let url = &img_url.url;
+                    if let Some(base64_data) = url.strip_prefix("data:").and_then(|s| {
+                        s.split_once(',').map(|(_, data)| data)
+                    }) {
+                        match base64::engine::general_purpose::STANDARD.decode(base64_data) {
+                            Ok(image_bytes) => {
+                                match mtmd_guard.bitmap_from_buffer(&image_bytes) {
+                                    Ok(bitmap) => bitmaps.push(bitmap),
+                                    Err(e) => {
+                                        self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                                        return Err(Response::error(
+                                            ErrorCode::InvalidRequest,
+                                            format!("Failed to load image: {}", e),
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                                return Err(Response::error(
+                                    ErrorCode::InvalidRequest,
+                                    format!("Invalid base64 image data: {}", e),
+                                ));
+                            }
+                        }
+                    } else {
+                        self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                        return Err(Response::error(
+                            ErrorCode::InvalidRequest,
+                            "Image URL must be a base64 data URI",
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Build prompt with image markers
+        let prompt = self.build_vision_prompt(&loaded.model, &messages);
+        let model_alias = loaded.alias.clone();
+
+        // Get stop sequences
+        let mut all_stops = loaded.model.get_chat_stop_sequences();
+        all_stops.extend(stop);
+
+        // Start streaming generation with vision
+        match self
+            .generate_vision_text_streaming(loaded, prompt, bitmaps, max_tokens, temperature, all_stops)
+            .await
+        {
+            Ok((rx, prompt_tokens, request_id)) => {
+                Ok((rx, prompt_tokens, request_id, model_alias))
+            }
+            Err(e) => Err(Response::error(ErrorCode::GenerationFailed, e.to_string())),
+        }
+    }
+
+    /// Generate streaming text with vision input
+    #[cfg(feature = "multimodal")]
+    async fn generate_vision_text_streaming(
+        &self,
+        loaded: std::sync::Arc<super::models::LoadedModel>,
+        prompt: String,
+        bitmaps: Vec<crate::Bitmap>,
+        max_tokens: u32,
+        temperature: f32,
+        stop_sequences: Vec<String>,
+    ) -> Result<(mpsc::Receiver<StreamChunk>, u32, String), MullamaError> {
+        let request_id = generate_completion_id();
+        let request_id_clone = request_id.clone();
+        let (tx, rx) = mpsc::channel::<StreamChunk>(32);
+
+        let model = loaded.model.clone();
+        let models_ref = self.models.clone();
+
+        // Process image chunks first, then spawn streaming task
+        // We need to get both locks, process images, then stream text generation
+
+        tokio::spawn(async move {
+            let mut context = loaded.context.write().await;
+            let mut mtmd_context = loaded.mtmd_context.as_ref().unwrap().write().await;
+
+            let result = tokio::task::block_in_place(|| {
+                // Clear KV cache
+                context.kv_cache_clear();
+
+                // Create bitmap references
+                let bitmap_refs: Vec<&crate::Bitmap> = bitmaps.iter().collect();
+
+                // Tokenize and evaluate chunks (processes images)
+                let chunks = mtmd_context.tokenize(&prompt, &bitmap_refs)?;
+                let n_batch = 512;
+                let _n_past = mtmd_context.eval_chunks(&mut context, &chunks, 0, 0, n_batch, true)?;
+
+                // Set up sampler
+                let mut sampler_params = SamplerParams::default();
+                sampler_params.temperature = temperature;
+                sampler_params.top_p = 0.9;
+                sampler_params.top_k = 40;
+                let mut sampler = sampler_params.build_chain(model.clone())?;
+
+                let mut generated = String::new();
+                let mut index = 0u32;
+
+                for _ in 0..max_tokens {
+                    let next_token = sampler.sample(&mut *context, -1);
+
+                    if model.vocab_is_eog(next_token) {
+                        break;
+                    }
+
+                    if let Ok(text) = model.token_to_str(next_token, 0, false) {
+                        generated.push_str(&text);
+
+                        // Check stop sequences before sending chunk
+                        if !stop_sequences.is_empty() {
+                            for stop in &stop_sequences {
+                                if let Some(pos) = generated.find(stop) {
+                                    let final_text = &generated[generated.len() - text.len()..];
+                                    let stop_pos_in_text = if pos >= generated.len() - text.len() {
+                                        pos - (generated.len() - text.len())
+                                    } else {
+                                        0
+                                    };
+
+                                    if stop_pos_in_text > 0 {
+                                        let partial = &final_text[..stop_pos_in_text];
+                                        let chunk = StreamChunk {
+                                            request_id: request_id_clone.clone(),
+                                            index,
+                                            delta: partial.to_string(),
+                                            token_id: next_token,
+                                        };
+                                        let _ = tx.blocking_send(chunk);
+                                    }
+                                    return Ok::<_, MullamaError>(index + 1);
+                                }
+                            }
+                        }
+
+                        // Send chunk
+                        let chunk = StreamChunk {
+                            request_id: request_id_clone.clone(),
+                            index,
+                            delta: text,
+                            token_id: next_token,
+                        };
+
+                        if tx.blocking_send(chunk).is_err() {
+                            break;
+                        }
+
+                        index += 1;
+                    }
+
+                    sampler.accept(next_token);
+                    context.decode_single(next_token)?;
+                }
+
+                Ok::<_, MullamaError>(index)
+            });
+
+            if let Ok(tokens) = result {
+                models_ref.add_tokens(tokens as u64);
+            }
+        });
+
+        // Return prompt_tokens as 0 for now since we process asynchronously
+        // The actual prompt token count will be computed inside the task
+        Ok((rx, 0, request_id))
+    }
+
     async fn handle_embeddings(&self, _model: Option<String>, _input: EmbeddingInput) -> Response {
         Response::error(ErrorCode::Internal, "Embeddings not yet implemented")
     }
@@ -377,9 +860,12 @@ impl Daemon {
 
     fn build_chat_prompt(&self, model: &crate::Model, messages: &[ChatMessage]) -> String {
         // Convert ChatMessage to the format expected by apply_chat_template
+        // Extract text content from each message (ignoring images for the prompt template)
+        let text_contents: Vec<String> = messages.iter().map(|m| m.content.text()).collect();
         let msg_tuples: Vec<(&str, &str)> = messages
             .iter()
-            .map(|m| (m.role.as_str(), m.content.as_str()))
+            .zip(text_contents.iter())
+            .map(|(m, content)| (m.role.as_str(), content.as_str()))
             .collect();
 
         // Try to use the model's built-in chat template
@@ -396,19 +882,19 @@ impl Daemon {
                 // Fallback to simple format if template fails
                 let mut prompt = String::new();
 
-                for msg in messages {
+                for (msg, content) in messages.iter().zip(text_contents.iter()) {
                     match msg.role.as_str() {
                         "system" => {
-                            prompt.push_str(&format!("System: {}\n\n", msg.content));
+                            prompt.push_str(&format!("System: {}\n\n", content));
                         }
                         "user" => {
-                            prompt.push_str(&format!("User: {}\n\n", msg.content));
+                            prompt.push_str(&format!("User: {}\n\n", content));
                         }
                         "assistant" => {
-                            prompt.push_str(&format!("Assistant: {}\n\n", msg.content));
+                            prompt.push_str(&format!("Assistant: {}\n\n", content));
                         }
                         _ => {
-                            prompt.push_str(&format!("{}: {}\n\n", msg.role, msg.content));
+                            prompt.push_str(&format!("{}: {}\n\n", msg.role, content));
                         }
                     }
                 }
@@ -469,12 +955,12 @@ impl Daemon {
                 if let Ok(text) = model.token_to_str(next_token, 0, false) {
                     generated.push_str(&text);
 
-                    // Check for stop sequences
+                    // Check for stop sequences (check if contained, not just ends_with)
                     if !stop_sequences.is_empty() {
                         for stop in &stop_sequences {
-                            if generated.ends_with(stop) {
-                                // Remove the stop sequence from output
-                                generated.truncate(generated.len() - stop.len());
+                            if let Some(pos) = generated.find(stop) {
+                                // Truncate at the stop sequence position
+                                generated.truncate(pos);
                                 return Ok((generated, completion_tokens));
                             }
                         }
@@ -550,6 +1036,34 @@ impl Daemon {
                     if let Ok(text) = model.token_to_str(next_token, 0, false) {
                         generated.push_str(&text);
 
+                        // Check stop sequences BEFORE sending chunk
+                        if !stop_sequences.is_empty() {
+                            for stop in &stop_sequences {
+                                if let Some(pos) = generated.find(stop) {
+                                    // Found stop sequence - send final partial chunk if needed
+                                    let final_text = &generated[generated.len() - text.len()..];
+                                    let stop_pos_in_text = if pos >= generated.len() - text.len() {
+                                        pos - (generated.len() - text.len())
+                                    } else {
+                                        0 // Stop sequence was in previous text
+                                    };
+
+                                    if stop_pos_in_text > 0 {
+                                        // Send the part before the stop sequence
+                                        let partial = &final_text[..stop_pos_in_text];
+                                        let chunk = StreamChunk {
+                                            request_id: request_id_clone.clone(),
+                                            index,
+                                            delta: partial.to_string(),
+                                            token_id: next_token,
+                                        };
+                                        let _ = tx.blocking_send(chunk);
+                                    }
+                                    return Ok::<_, MullamaError>(index + 1);
+                                }
+                            }
+                        }
+
                         // Send chunk
                         let chunk = StreamChunk {
                             request_id: request_id_clone.clone(),
@@ -561,15 +1075,6 @@ impl Daemon {
                         // If receiver dropped, stop generation
                         if tx.blocking_send(chunk).is_err() {
                             break;
-                        }
-
-                        // Check stop sequences
-                        if !stop_sequences.is_empty() {
-                            for stop in &stop_sequences {
-                                if generated.ends_with(stop) {
-                                    return Ok::<_, MullamaError>(index + 1);
-                                }
-                            }
                         }
 
                         index += 1;

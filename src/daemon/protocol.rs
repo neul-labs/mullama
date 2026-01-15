@@ -87,9 +87,98 @@ fn default_temperature() -> f32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: MessageContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// Message content - can be simple text or array of content parts (for vision)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// Simple text content
+    Text(String),
+    /// Array of content parts (text and/or images)
+    Parts(Vec<ContentPart>),
+}
+
+impl MessageContent {
+    /// Extract the text content from the message
+    pub fn text(&self) -> String {
+        match self {
+            MessageContent::Text(s) => s.clone(),
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    /// Check if this content contains images
+    pub fn has_images(&self) -> bool {
+        match self {
+            MessageContent::Text(_) => false,
+            MessageContent::Parts(parts) => parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+        }
+    }
+
+    /// Extract image URLs/data from the content
+    pub fn images(&self) -> Vec<&ImageUrl> {
+        match self {
+            MessageContent::Text(_) => vec![],
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::ImageUrl { image_url } => Some(image_url),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Default for MessageContent {
+    fn default() -> Self {
+        MessageContent::Text(String::new())
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+/// Content part in a message (OpenAI vision API format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    /// Text content
+    #[serde(rename = "text")]
+    Text { text: String },
+    /// Image URL content (can be URL or base64 data URI)
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+/// Image URL details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// URL or base64 data URI (data:image/jpeg;base64,...)
+    pub url: String,
+    /// Optional detail level for image processing
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// Input for embeddings (can be string or array)

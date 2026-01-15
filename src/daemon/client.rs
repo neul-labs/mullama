@@ -190,7 +190,7 @@ impl DaemonClient {
     ) -> Result<ChatResult, MullamaError> {
         let messages = vec![ChatMessage {
             role: "user".to_string(),
-            content: message.to_string(),
+            content: message.to_string().into(),
             name: None,
         }];
 
@@ -225,7 +225,7 @@ impl DaemonClient {
                 text: resp
                     .choices
                     .first()
-                    .map(|c| c.message.content.clone())
+                    .map(|c| c.message.content.text())
                     .unwrap_or_default(),
                 model: resp.model,
                 prompt_tokens: resp.usage.prompt_tokens,

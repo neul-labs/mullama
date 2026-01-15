@@ -217,12 +217,64 @@ async fn chat_completions(
     State(daemon): State<AppState>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
+    // Check if any message contains images (vision request)
+    let has_images = req.messages.iter().any(|m| m.content.has_images());
+
     // Handle streaming requests
     if req.stream {
+        if has_images {
+            #[cfg(feature = "multimodal")]
+            return chat_completions_vision_stream(daemon, req).await;
+            #[cfg(not(feature = "multimodal"))]
+            return Err(ApiError::new("Vision support requires multimodal feature"));
+        }
         return chat_completions_stream(daemon, req).await;
     }
 
-    // Non-streaming request
+    // Handle vision requests (non-streaming)
+    if has_images {
+        #[cfg(feature = "multimodal")]
+        {
+            match daemon
+                .handle_vision_chat_completion(
+                    req.model,
+                    req.messages,
+                    req.max_tokens,
+                    req.temperature,
+                    req.stop.unwrap_or_default(),
+                )
+                .await
+            {
+                super::protocol::Response::ChatCompletion(resp) => {
+                    return Ok(Json(ChatCompletionResponse {
+                        id: resp.id,
+                        object: resp.object,
+                        created: resp.created,
+                        model: resp.model,
+                        choices: resp
+                            .choices
+                            .into_iter()
+                            .map(|c| ChatChoice {
+                                index: c.index,
+                                message: c.message,
+                                finish_reason: c.finish_reason,
+                            })
+                            .collect(),
+                        usage: resp.usage,
+                    })
+                    .into_response());
+                }
+                super::protocol::Response::Error { code, message, .. } => {
+                    return Err(ApiError::new(format!("{:?}: {}", code, message)));
+                }
+                _ => return Err(ApiError::new("Unexpected response")),
+            }
+        }
+        #[cfg(not(feature = "multimodal"))]
+        return Err(ApiError::new("Vision support requires multimodal feature"));
+    }
+
+    // Non-streaming text-only request
     let request = super::protocol::Request::ChatCompletion {
         model: req.model,
         messages: req.messages,
@@ -282,6 +334,97 @@ async fn chat_completions_stream(
                 ApiError::new(message)
             } else {
                 ApiError::new("Failed to start streaming")
+            }
+        })?;
+
+    // Convert mpsc receiver to SSE stream
+    let stream = ReceiverStream::new(rx);
+    let request_id_clone = request_id.clone();
+    let model_clone = model_alias.clone();
+
+    let sse_stream = stream
+        .map(move |chunk| {
+            let sse_chunk = ChatCompletionChunk {
+                id: request_id_clone.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: model_clone.clone(),
+                choices: vec![ChatChoiceDelta {
+                    index: chunk.index,
+                    delta: DeltaContent {
+                        role: if chunk.index == 0 {
+                            Some("assistant".to_string())
+                        } else {
+                            None
+                        },
+                        content: Some(chunk.delta),
+                    },
+                    finish_reason: None,
+                }],
+            };
+
+            Event::default()
+                .data(serde_json::to_string(&sse_chunk).unwrap_or_default())
+        })
+        .chain(stream::once(async move {
+            // Send final chunk with finish_reason
+            let final_chunk = ChatCompletionChunk {
+                id: request_id,
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: model_alias,
+                choices: vec![ChatChoiceDelta {
+                    index: 0,
+                    delta: DeltaContent {
+                        role: None,
+                        content: None,
+                    },
+                    finish_reason: Some("stop".to_string()),
+                }],
+            };
+            Event::default()
+                .data(serde_json::to_string(&final_chunk).unwrap_or_default())
+        }))
+        .chain(stream::once(async {
+            Event::default().data("[DONE]")
+        }))
+        .map(Ok::<_, Infallible>);
+
+    Ok(Sse::new(sse_stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response())
+}
+
+/// Handle streaming vision chat completions with SSE
+#[cfg(feature = "multimodal")]
+async fn chat_completions_vision_stream(
+    daemon: AppState,
+    req: ChatCompletionRequest,
+) -> Result<Response, ApiError> {
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Start streaming vision generation
+    let (rx, _prompt_tokens, request_id, model_alias) = daemon
+        .handle_vision_chat_completion_streaming(
+            req.model,
+            req.messages,
+            req.max_tokens,
+            req.temperature,
+            req.stop.unwrap_or_default(),
+        )
+        .await
+        .map_err(|resp| {
+            if let super::protocol::Response::Error { message, .. } = resp {
+                ApiError::new(message)
+            } else {
+                ApiError::new("Failed to start vision streaming")
             }
         })?;
 
