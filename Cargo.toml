@@ -37,11 +37,12 @@ streaming = ["async", "async-stream"]
 web = ["async", "axum", "tower", "tower-http"]
 websockets = ["async", "axum", "tokio-tungstenite"]
 parallel = ["rayon"]
+late-interaction = []
 tokio-runtime = ["tokio", "tokio-util"]
 daemon = ["async", "tokio-runtime", "web", "nng", "ratatui", "crossterm", "clap", "reqwest", "indicatif", "urlencoding", "tokio-stream", "base64"]
 windows-optimization = ["windows"]
 macos-optimization = ["core-foundation", "coreaudio-rs"]
-full = ["async", "streaming", "web", "websockets", "multimodal", "parallel", "tokio-runtime", "format-conversion", "streaming-audio", "daemon"]
+full = ["async", "streaming", "web", "websockets", "multimodal", "parallel", "late-interaction", "tokio-runtime", "format-conversion", "streaming-audio", "daemon"]
 
 [dependencies]
 thiserror = "1.0"
@@ -50,6 +51,8 @@ num_enum = "0.7"
 num_cpus = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
+regex = "1.10"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.0"
@@ -181,3 +184,7 @@ required-features = ["async"]
 [[example]]
 name = "chat"
 required-features = ["async"]
+
+[[example]]
+name = "late_interaction"
+required-features = ["late-interaction"]

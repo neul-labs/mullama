@@ -89,6 +89,7 @@
 //! ```
 
 pub mod batch;
+pub mod capabilities;
 pub mod context;
 pub mod embedding;
 pub mod error;
@@ -113,6 +114,8 @@ pub mod format_conversion;
 pub mod multimodal;
 #[cfg(feature = "parallel")]
 pub mod parallel;
+#[cfg(feature = "late-interaction")]
+pub mod late_interaction;
 #[cfg(feature = "streaming")]
 pub mod streaming;
 #[cfg(feature = "streaming-audio")]
@@ -334,6 +337,10 @@ pub mod quantization;
 
 // Re-export the public API
 pub use batch::Batch;
+pub use capabilities::{
+    detect_capabilities, registry, Capabilities, CapabilityRegistry, ModelFamilyConfig,
+    ThinkingTokens, TokenConfig, ToolFormat,
+};
 pub use context::{Context, ContextParams};
 pub use embedding::{EmbeddingUtil, Embeddings};
 pub use error::MullamaError;
@@ -368,6 +375,10 @@ pub use multimodal::{
 };
 #[cfg(feature = "parallel")]
 pub use parallel::{BatchGenerationConfig, GenerationResult, ParallelProcessor, ThreadPoolConfig};
+#[cfg(feature = "late-interaction")]
+pub use late_interaction::{
+    LateInteractionScorer, MultiVectorConfig, MultiVectorEmbedding, MultiVectorGenerator,
+};
 #[cfg(feature = "streaming")]
 pub use streaming::{StreamConfig, TokenData as StreamTokenData, TokenStream};
 #[cfg(feature = "streaming-audio")]
@@ -428,6 +439,9 @@ pub mod prelude {
 
     #[cfg(feature = "parallel")]
     pub use crate::{BatchGenerationConfig, ParallelProcessor};
+
+    #[cfg(feature = "late-interaction")]
+    pub use crate::{LateInteractionScorer, MultiVectorConfig, MultiVectorEmbedding, MultiVectorGenerator};
 
     #[cfg(feature = "websockets")]
     pub use crate::{WSMessage, WebSocketServer};

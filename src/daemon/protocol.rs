@@ -46,6 +46,18 @@ pub enum Request {
         stream: bool,
         #[serde(default)]
         stop: Vec<String>,
+        /// Response format (text or JSON)
+        #[serde(default)]
+        response_format: Option<ResponseFormat>,
+        /// Tools/functions the model can call
+        #[serde(default)]
+        tools: Option<Vec<Tool>>,
+        /// How to choose which tool to call
+        #[serde(default)]
+        tool_choice: Option<ToolChoice>,
+        /// Extended thinking configuration
+        #[serde(default)]
+        thinking: Option<ThinkingConfig>,
     },
 
     /// Text completion
@@ -87,9 +99,16 @@ fn default_temperature() -> f32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(default)]
     pub content: MessageContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Tool calls made by the assistant
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Tool call ID when role is "tool"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Message content - can be simple text or array of content parts (for vision)
@@ -295,6 +314,9 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<ChatChoice>,
     pub usage: Usage,
+    /// Thinking content from reasoning models
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingContent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,6 +351,33 @@ pub struct StreamChunk {
     pub index: u32,
     pub delta: String,
     pub token_id: i32,
+    /// True if this chunk is thinking content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
+    /// Tool call delta for streaming tool calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+/// Delta for streaming tool calls
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallDelta {
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub call_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<FunctionCallDelta>,
+}
+
+/// Function call delta
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCallDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }
 
 /// Token usage
@@ -368,6 +417,147 @@ pub enum ErrorCode {
     RateLimited,
     Internal,
     Timeout,
+}
+
+// ==================== JSON Mode Types ====================
+
+/// Response format specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ResponseFormat {
+    /// Plain text output
+    #[serde(rename = "text")]
+    Text,
+    /// JSON object output (model will produce valid JSON)
+    #[serde(rename = "json_object")]
+    JsonObject,
+    /// JSON output conforming to a schema
+    #[serde(rename = "json_schema")]
+    JsonSchema {
+        json_schema: JsonSchemaSpec,
+    },
+}
+
+impl Default for ResponseFormat {
+    fn default() -> Self {
+        ResponseFormat::Text
+    }
+}
+
+/// JSON schema specification for structured output
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonSchemaSpec {
+    /// Name for the schema
+    pub name: String,
+    /// The JSON schema definition
+    pub schema: serde_json::Value,
+    /// Whether to enforce strict schema compliance
+    #[serde(default)]
+    pub strict: bool,
+}
+
+// ==================== Tool/Function Calling Types ====================
+
+/// Tool definition for function calling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    /// Tool type (currently only "function" is supported)
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    /// Function definition
+    pub function: FunctionDefinition,
+}
+
+/// Function definition within a tool
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDefinition {
+    /// Name of the function
+    pub name: String,
+    /// Description of what the function does
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// JSON schema for function parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+    /// Whether strict schema validation is required
+    #[serde(default)]
+    pub strict: bool,
+}
+
+/// Tool choice specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    /// Let model decide: "auto", "none", "required"
+    Mode(String),
+    /// Force a specific function
+    Specific {
+        #[serde(rename = "type")]
+        choice_type: String,
+        function: ToolChoiceFunction,
+    },
+}
+
+/// Specific function choice
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolChoiceFunction {
+    pub name: String,
+}
+
+/// A tool call made by the model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Unique ID for this tool call
+    pub id: String,
+    /// Type of call (always "function" for now)
+    #[serde(rename = "type")]
+    pub call_type: String,
+    /// The function call details
+    pub function: FunctionCall,
+}
+
+/// Function call details within a tool call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    /// Name of the function to call
+    pub name: String,
+    /// JSON string of arguments
+    pub arguments: String,
+}
+
+// ==================== Thinking Mode Types ====================
+
+/// Configuration for extended thinking mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    /// Enable extended thinking
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum tokens for thinking (0 = unlimited)
+    #[serde(default)]
+    pub budget_tokens: u32,
+    /// Include thinking content in stream
+    #[serde(default)]
+    pub stream_thinking: bool,
+}
+
+impl Default for ThinkingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            budget_tokens: 0,
+            stream_thinking: false,
+        }
+    }
+}
+
+/// Thinking content returned by models with reasoning capabilities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingContent {
+    /// The thinking/reasoning content
+    pub content: String,
+    /// Number of tokens used for thinking
+    pub tokens: u32,
 }
 
 impl Request {

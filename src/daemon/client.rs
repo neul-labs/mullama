@@ -192,6 +192,8 @@ impl DaemonClient {
             role: "user".to_string(),
             content: message.to_string().into(),
             name: None,
+            tool_calls: None,
+            tool_call_id: None,
         }];
 
         self.chat_completion(messages, model, max_tokens, temperature)
@@ -218,6 +220,10 @@ impl DaemonClient {
                 temperature,
                 stream: false,
                 stop: vec![],
+                response_format: None,
+                tools: None,
+                tool_choice: None,
+                thinking: None,
             },
             generation_timeout,
         )? {
@@ -288,6 +294,67 @@ impl DaemonClient {
         }
     }
 
+    /// Generate embedding for a single text
+    pub fn embed(&self, text: &str, model: Option<&str>) -> Result<EmbeddingResult, MullamaError> {
+        // Use a reasonable timeout for embedding generation
+        let embedding_timeout = Duration::from_secs(60);
+
+        match self.request_with_timeout(
+            &Request::Embeddings {
+                model: model.map(String::from),
+                input: EmbeddingInput::Single(text.to_string()),
+            },
+            embedding_timeout,
+        )? {
+            Response::Embeddings(resp) => {
+                let embedding = resp
+                    .data
+                    .into_iter()
+                    .next()
+                    .map(|d| d.embedding)
+                    .unwrap_or_default();
+                Ok(EmbeddingResult {
+                    embedding,
+                    model: resp.model,
+                    prompt_tokens: resp.usage.prompt_tokens,
+                })
+            }
+            Response::Error { message, .. } => Err(MullamaError::DaemonError(message)),
+            _ => Err(MullamaError::DaemonError("Unexpected response".into())),
+        }
+    }
+
+    /// Generate embeddings for multiple texts
+    pub fn embed_batch(
+        &self,
+        texts: &[&str],
+        model: Option<&str>,
+    ) -> Result<BatchEmbeddingResult, MullamaError> {
+        // Use a longer timeout for batch embedding generation
+        let embedding_timeout = Duration::from_secs(300);
+
+        let input = EmbeddingInput::Multiple(texts.iter().map(|s| s.to_string()).collect());
+
+        match self.request_with_timeout(
+            &Request::Embeddings {
+                model: model.map(String::from),
+                input,
+            },
+            embedding_timeout,
+        )? {
+            Response::Embeddings(resp) => {
+                let embeddings = resp.data.into_iter().map(|d| d.embedding).collect();
+                Ok(BatchEmbeddingResult {
+                    embeddings,
+                    model: resp.model,
+                    prompt_tokens: resp.usage.prompt_tokens,
+                })
+            }
+            Response::Error { message, .. } => Err(MullamaError::DaemonError(message)),
+            _ => Err(MullamaError::DaemonError("Unexpected response".into())),
+        }
+    }
+
     /// Shutdown the daemon
     pub fn shutdown(&self) -> Result<(), MullamaError> {
         match self.request(&Request::Shutdown)? {
@@ -335,5 +402,40 @@ impl CompletionResult {
         } else {
             (self.completion_tokens as f64) / (self.duration_ms as f64 / 1000.0)
         }
+    }
+}
+
+/// Result of single text embedding
+#[derive(Debug, Clone)]
+pub struct EmbeddingResult {
+    pub embedding: Vec<f32>,
+    pub model: String,
+    pub prompt_tokens: u32,
+}
+
+impl EmbeddingResult {
+    /// Get the embedding dimension
+    pub fn dimension(&self) -> usize {
+        self.embedding.len()
+    }
+}
+
+/// Result of batch text embedding
+#[derive(Debug, Clone)]
+pub struct BatchEmbeddingResult {
+    pub embeddings: Vec<Vec<f32>>,
+    pub model: String,
+    pub prompt_tokens: u32,
+}
+
+impl BatchEmbeddingResult {
+    /// Get the number of embeddings
+    pub fn count(&self) -> usize {
+        self.embeddings.len()
+    }
+
+    /// Get the embedding dimension (from first embedding)
+    pub fn dimension(&self) -> usize {
+        self.embeddings.first().map(|e| e.len()).unwrap_or(0)
     }
 }

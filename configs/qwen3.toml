@@ -1,0 +1,43 @@
+# Qwen 3 Model Family Configuration
+# This is an example config file. Place custom configs in:
+# - ~/.config/mullama/models/ (Linux/macOS)
+# - $MULLAMA_CONFIG/models/ (custom path)
+
+[family]
+name = "qwen3"
+display_name = "Qwen 3"
+# Regex patterns to match model names (case-insensitive)
+patterns = [
+    "qwen3",
+    "qwen-3",
+    "qwen_3",
+    "qwen2\\.5",
+]
+# Higher priority configs are checked first
+priority = 10
+
+[capabilities]
+native_json = true   # Supports JSON output mode
+tool_use = true      # Supports function/tool calling
+thinking = false     # Extended thinking (CoT)
+vision = false       # Vision/image input
+
+[tokens]
+# Chat template tokens
+bos = "<|im_start|>"
+eos = "<|im_end|>"
+user_prefix = "<|im_start|>user\n"
+user_suffix = "<|im_end|>\n"
+assistant_prefix = "<|im_start|>assistant\n"
+assistant_suffix = "<|im_end|>\n"
+system_prefix = "<|im_start|>system\n"
+system_suffix = "<|im_end|>\n"
+stop_sequences = ["<|im_end|>", "<|endoftext|>"]
+
+[tool_format]
+# How this model expects tool definitions
+style = "qwen"  # "qwen", "llama", "generic"
+tool_call_start = "<tool_call>"
+tool_call_end = "</tool_call>"
+tool_result_start = "<tool_response>"
+tool_result_end = "</tool_response>"

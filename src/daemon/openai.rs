@@ -19,7 +19,7 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
-use super::protocol::{ChatMessage, EmbeddingInput, StreamChunk, Usage};
+use super::protocol::{ChatMessage, EmbeddingInput, Response as ProtoResponse, StreamChunk, Usage};
 use super::server::Daemon;
 
 /// Shared state for the HTTP server
@@ -282,6 +282,10 @@ async fn chat_completions(
         temperature: req.temperature,
         stream: false,
         stop: req.stop.unwrap_or_default(),
+        response_format: None,
+        tools: None,
+        tool_choice: None,
+        thinking: None,
     };
 
     match daemon.handle_request(request).await {
@@ -566,8 +570,28 @@ async fn embeddings(
     State(daemon): State<AppState>,
     Json(req): Json<EmbeddingsRequest>,
 ) -> Result<Json<EmbeddingsResponse>, ApiError> {
-    // Embeddings not yet implemented
-    Err(ApiError::new("Embeddings not yet implemented"))
+    match daemon.handle_embeddings(req.model, req.input).await {
+        ProtoResponse::Embeddings(resp) => {
+            // Convert from protocol types to openai types
+            let data = resp
+                .data
+                .into_iter()
+                .map(|d| EmbeddingObject {
+                    object: d.object,
+                    embedding: d.embedding,
+                    index: d.index,
+                })
+                .collect();
+            Ok(Json(EmbeddingsResponse {
+                object: resp.object,
+                data,
+                model: resp.model,
+                usage: resp.usage,
+            }))
+        }
+        ProtoResponse::Error { message, .. } => Err(ApiError::new(&message)),
+        _ => Err(ApiError::new("Unexpected response from embeddings handler")),
+    }
 }
 
 /// GET /health

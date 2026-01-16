@@ -1,0 +1,39 @@
+# QwQ Model Configuration (Qwen Reasoning Model)
+# Supports extended thinking/chain-of-thought
+
+[family]
+name = "qwq"
+display_name = "QwQ (Reasoning)"
+patterns = ["qwq", "qwen-qwq"]
+priority = 20  # Higher than base qwen to match first
+
+[capabilities]
+native_json = true
+tool_use = true
+thinking = true  # This is a reasoning model!
+vision = false
+
+[tokens]
+# Inherits from qwen3 but can override
+extends = "qwen3"
+bos = "<|im_start|>"
+eos = "<|im_end|>"
+user_prefix = "<|im_start|>user\n"
+user_suffix = "<|im_end|>\n"
+assistant_prefix = "<|im_start|>assistant\n"
+assistant_suffix = "<|im_end|>\n"
+system_prefix = "<|im_start|>system\n"
+system_suffix = "<|im_end|>\n"
+stop_sequences = ["<|im_end|>"]
+
+[tool_format]
+style = "qwen"
+tool_call_start = "<tool_call>"
+tool_call_end = "</tool_call>"
+tool_result_start = "<tool_response>"
+tool_result_end = "</tool_response>"
+
+[thinking]
+# Tokens that delimit the thinking/reasoning block
+start_token = "<think>"
+end_token = "</think>"

@@ -1,0 +1,25 @@
+# Gemma 3 Model Family Configuration
+
+[family]
+name = "gemma3"
+display_name = "Gemma 3"
+patterns = ["gemma-3", "gemma3", "tinygemma"]
+priority = 10
+
+[capabilities]
+native_json = true
+tool_use = true
+thinking = false
+vision = false
+
+[tokens]
+bos = "<bos>"
+eos = "<end_of_turn>"
+user_prefix = "<start_of_turn>user\n"
+user_suffix = "<end_of_turn>\n"
+assistant_prefix = "<start_of_turn>model\n"
+assistant_suffix = "<end_of_turn>\n"
+# Gemma uses user role for system messages
+system_prefix = "<start_of_turn>user\n"
+system_suffix = "<end_of_turn>\n"
+stop_sequences = ["<end_of_turn>"]

@@ -1,0 +1,36 @@
+# Llama 3 Model Family Configuration
+
+[family]
+name = "llama3"
+display_name = "Llama 3"
+patterns = [
+    "llama-3",
+    "llama3",
+    "llama-3\\.1",
+    "llama-3\\.2",
+    "llama-3\\.3",
+]
+priority = 10
+
+[capabilities]
+native_json = true
+tool_use = true
+thinking = false
+vision = false
+
+[tokens]
+bos = "<|begin_of_text|>"
+eos = "<|eot_id|>"
+user_prefix = "<|start_header_id|>user<|end_header_id|>\n\n"
+user_suffix = "<|eot_id|>"
+assistant_prefix = "<|start_header_id|>assistant<|end_header_id|>\n\n"
+assistant_suffix = "<|eot_id|>"
+system_prefix = "<|start_header_id|>system<|end_header_id|>\n\n"
+system_suffix = "<|eot_id|>"
+stop_sequences = ["<|eot_id|>", "<|eom_id|>"]
+
+[tool_format]
+style = "llama"
+tool_call_start = "<|python_tag|>"
+tool_result_start = "<|start_header_id|>ipython<|end_header_id|>\n\n"
+tool_result_end = "<|eot_id|>"

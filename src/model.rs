@@ -509,6 +509,16 @@ impl Model {
 impl Model {
     // ==================== Model Info ====================
 
+    /// Get the model architecture (e.g., "llama", "qwen2", "gemma")
+    pub fn architecture(&self) -> Option<String> {
+        self.meta_val("general.architecture")
+    }
+
+    /// Get the model name from metadata
+    pub fn name(&self) -> Option<String> {
+        self.meta_val("general.name")
+    }
+
     /// Get a description of the model
     pub fn desc(&self) -> String {
         let mut buf = vec![0u8; 256];
@@ -591,45 +601,81 @@ impl Model {
         }
     }
 
-    /// Extract stop sequences from the model's chat template
+    /// Extract stop sequences from the model's chat template and architecture
     ///
     /// Returns common end-of-turn markers found in the template that should
-    /// be used as stop sequences during generation.
+    /// be used as stop sequences during generation. Also adds architecture-specific
+    /// stop sequences to ensure proper generation termination.
     pub fn get_chat_stop_sequences(&self) -> Vec<String> {
-        let template = match self.chat_template() {
-            Some(t) => t,
-            None => return vec![],
-        };
-
         let mut stops = Vec::new();
 
-        // ChatML/Qwen style (with and without angle brackets)
-        if template.contains("<|im_end|>") {
-            stops.push("<|im_end|>".to_string());
-            // Some models generate without outer angle brackets
-            stops.push("|im_end|".to_string());
+        // First, add architecture-specific stop sequences
+        // This ensures we have the right stops even if chat template detection fails
+        if let Some(arch) = self.architecture() {
+            let arch_lower = arch.to_lowercase();
+            match arch_lower.as_str() {
+                // Qwen family (ChatML style)
+                "qwen" | "qwen2" | "qwen2moe" | "qwen2vl" | "qwen3" => {
+                    stops.push("<|im_end|>".to_string());
+                    stops.push("<|endoftext|>".to_string());
+                }
+                // Llama 3 family
+                "llama" => {
+                    stops.push("<|eot_id|>".to_string());
+                    stops.push("<|eom_id|>".to_string());
+                }
+                // Gemma family
+                "gemma" | "gemma2" | "gemma3" => {
+                    stops.push("<end_of_turn>".to_string());
+                }
+                // Phi family (uses ChatML style)
+                "phi" | "phi2" | "phi3" | "phi4" => {
+                    stops.push("<|end|>".to_string());
+                    stops.push("<|im_end|>".to_string());
+                }
+                // Mistral/Mixtral family
+                "mistral" | "mixtral" => {
+                    stops.push("</s>".to_string());
+                }
+                // DeepSeek family
+                "deepseek" | "deepseek2" => {
+                    stops.push("<|end▁of▁sentence|>".to_string());
+                    stops.push("<｜end▁of▁sentence｜>".to_string());
+                }
+                _ => {}
+            }
         }
-        // Llama 3 style
-        if template.contains("<|eot_id|>") {
-            stops.push("<|eot_id|>".to_string());
-        }
-        if template.contains("<|eom_id|>") {
-            stops.push("<|eom_id|>".to_string());
-        }
-        // Generic end tokens
-        if template.contains("<|end|>") {
-            stops.push("<|end|>".to_string());
-        }
-        if template.contains("<|endoftext|>") {
-            stops.push("<|endoftext|>".to_string());
-        }
-        // Gemma style
-        if template.contains("<end_of_turn>") {
-            stops.push("<end_of_turn>".to_string());
-        }
-        // Mistral style
-        if template.contains("[/INST]") && template.contains("</s>") {
-            stops.push("</s>".to_string());
+
+        // Also detect from chat template for additional coverage
+        if let Some(template) = self.chat_template() {
+            // ChatML/Qwen style (with and without angle brackets)
+            if template.contains("<|im_end|>") && !stops.contains(&"<|im_end|>".to_string()) {
+                stops.push("<|im_end|>".to_string());
+                // Some models generate without outer angle brackets
+                stops.push("|im_end|".to_string());
+            }
+            // Llama 3 style
+            if template.contains("<|eot_id|>") && !stops.contains(&"<|eot_id|>".to_string()) {
+                stops.push("<|eot_id|>".to_string());
+            }
+            if template.contains("<|eom_id|>") && !stops.contains(&"<|eom_id|>".to_string()) {
+                stops.push("<|eom_id|>".to_string());
+            }
+            // Generic end tokens
+            if template.contains("<|end|>") && !stops.contains(&"<|end|>".to_string()) {
+                stops.push("<|end|>".to_string());
+            }
+            if template.contains("<|endoftext|>") && !stops.contains(&"<|endoftext|>".to_string()) {
+                stops.push("<|endoftext|>".to_string());
+            }
+            // Gemma style
+            if template.contains("<end_of_turn>") && !stops.contains(&"<end_of_turn>".to_string()) {
+                stops.push("<end_of_turn>".to_string());
+            }
+            // Mistral style
+            if template.contains("[/INST]") && template.contains("</s>") && !stops.contains(&"</s>".to_string()) {
+                stops.push("</s>".to_string());
+            }
         }
 
         stops

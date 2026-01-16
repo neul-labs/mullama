@@ -1,0 +1,30 @@
+# DeepSeek R1 Model Configuration (Reasoning Model)
+# Supports extended thinking/chain-of-thought
+
+[family]
+name = "deepseek-r1"
+display_name = "DeepSeek R1 (Reasoning)"
+patterns = ["deepseek-r1", "deepseek.*r1"]
+priority = 15  # Higher than base deepseek
+
+[capabilities]
+native_json = true
+tool_use = true
+thinking = true  # This is a reasoning model!
+vision = false
+
+[tokens]
+extends = "deepseek"
+bos = "<|begin▁of▁sentence|>"
+eos = "<|end▁of▁sentence|>"
+user_prefix = "<|User|>"
+user_suffix = "\n"
+assistant_prefix = "<|Assistant|>"
+assistant_suffix = "<|end▁of▁sentence|>"
+system_prefix = "<|System|>"
+system_suffix = "\n"
+stop_sequences = ["<|end▁of▁sentence|>"]
+
+[thinking]
+start_token = "<think>"
+end_token = "</think>"

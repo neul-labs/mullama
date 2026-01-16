@@ -240,6 +240,24 @@ enum Commands {
         socket: String,
     },
 
+    /// Generate embeddings for text
+    Embed {
+        /// Text(s) to embed
+        text: Vec<String>,
+
+        /// Model to use
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// IPC socket to connect to
+        #[arg(short, long, default_value = DEFAULT_SOCKET)]
+        socket: String,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Download a model from HuggingFace
     #[command(alias = "download")]
     Pull {
@@ -423,6 +441,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             socket,
         } => {
             tokenize_text(&socket, &text, model.as_deref())?;
+        }
+
+        Commands::Embed {
+            text,
+            model,
+            socket,
+            json,
+        } => {
+            embed_text(&socket, &text, model.as_deref(), json)?;
         }
 
         Commands::Pull { spec, quiet } => {
@@ -1012,6 +1039,68 @@ fn tokenize_text(
     let tokens = client.tokenize(text, model)?;
 
     println!("Tokens ({}): {:?}", tokens.len(), tokens);
+
+    Ok(())
+}
+
+fn embed_text(
+    socket: &str,
+    texts: &[String],
+    model: Option<&str>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = connect(socket)?;
+
+    if texts.is_empty() {
+        return Err("No text provided".into());
+    }
+
+    if texts.len() == 1 {
+        // Single embedding
+        let result = client.embed(&texts[0], model)?;
+
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "model": result.model,
+                    "dimension": result.dimension(),
+                    "prompt_tokens": result.prompt_tokens,
+                    "embedding": result.embedding,
+                }))?
+            );
+        } else {
+            println!("Model: {}", result.model);
+            println!("Dimension: {}", result.dimension());
+            println!("Tokens: {}", result.prompt_tokens);
+            println!("Embedding (first 10): {:?}...", &result.embedding[..result.embedding.len().min(10)]);
+        }
+    } else {
+        // Batch embedding
+        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let result = client.embed_batch(&text_refs, model)?;
+
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "model": result.model,
+                    "count": result.count(),
+                    "dimension": result.dimension(),
+                    "prompt_tokens": result.prompt_tokens,
+                    "embeddings": result.embeddings,
+                }))?
+            );
+        } else {
+            println!("Model: {}", result.model);
+            println!("Count: {}", result.count());
+            println!("Dimension: {}", result.dimension());
+            println!("Tokens: {}", result.prompt_tokens);
+            for (i, emb) in result.embeddings.iter().enumerate() {
+                println!("  [{}]: {:?}...", i, &emb[..emb.len().min(5)]);
+            }
+        }
+    }
 
     Ok(())
 }
