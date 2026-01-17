@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The llama.cpp version to use when downloading
-const LLAMA_CPP_VERSION: &str = "b4568";
+const LLAMA_CPP_VERSION: &str = "b7542";
 const LLAMA_CPP_REPO: &str = "https://github.com/ggml-org/llama.cpp";
 
 fn main() {
