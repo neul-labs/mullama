@@ -248,9 +248,7 @@ impl Daemon {
             .generate_text_streaming(loaded, prompt, max_tokens, temperature, all_stops)
             .await
         {
-            Ok((rx, prompt_tokens, request_id)) => {
-                Ok((rx, prompt_tokens, request_id, model_alias))
-            }
+            Ok((rx, prompt_tokens, request_id)) => Ok((rx, prompt_tokens, request_id, model_alias)),
             Err(e) => Err(Response::error(ErrorCode::GenerationFailed, e.to_string())),
         }
     }
@@ -382,8 +380,8 @@ impl Daemon {
         temperature: f32,
         stop: Vec<String>,
     ) -> Response {
-        use base64::Engine;
         use crate::{Bitmap, MtmdContext};
+        use base64::Engine;
 
         // Get model
         let loaded = match self.models.get(model.as_deref()).await {
@@ -459,7 +457,14 @@ impl Daemon {
 
         // Process with multimodal context
         let result = self
-            .generate_vision_text(&loaded, &prompt, &bitmaps, max_tokens, temperature, &all_stops)
+            .generate_vision_text(
+                &loaded,
+                &prompt,
+                &bitmaps,
+                max_tokens,
+                temperature,
+                &all_stops,
+            )
             .await;
 
         self.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -643,17 +648,9 @@ impl Daemon {
         max_tokens: u32,
         temperature: f32,
         stop: Vec<String>,
-    ) -> Result<
-        (
-            mpsc::Receiver<StreamChunk>,
-            u32,
-            String,
-            String,
-        ),
-        Response,
-    > {
-        use base64::Engine;
+    ) -> Result<(mpsc::Receiver<StreamChunk>, u32, String, String), Response> {
         use crate::Bitmap;
+        use base64::Engine;
 
         // Get model
         let loaded = match self.models.get(model.as_deref()).await {
@@ -680,22 +677,21 @@ impl Daemon {
             for msg in &messages {
                 for img_url in msg.content.images() {
                     let url = &img_url.url;
-                    if let Some(base64_data) = url.strip_prefix("data:").and_then(|s| {
-                        s.split_once(',').map(|(_, data)| data)
-                    }) {
+                    if let Some(base64_data) = url
+                        .strip_prefix("data:")
+                        .and_then(|s| s.split_once(',').map(|(_, data)| data))
+                    {
                         match base64::engine::general_purpose::STANDARD.decode(base64_data) {
-                            Ok(image_bytes) => {
-                                match mtmd_guard.bitmap_from_buffer(&image_bytes) {
-                                    Ok(bitmap) => bitmaps.push(bitmap),
-                                    Err(e) => {
-                                        self.active_requests.fetch_sub(1, Ordering::Relaxed);
-                                        return Err(Response::error(
-                                            ErrorCode::InvalidRequest,
-                                            format!("Failed to load image: {}", e),
-                                        ));
-                                    }
+                            Ok(image_bytes) => match mtmd_guard.bitmap_from_buffer(&image_bytes) {
+                                Ok(bitmap) => bitmaps.push(bitmap),
+                                Err(e) => {
+                                    self.active_requests.fetch_sub(1, Ordering::Relaxed);
+                                    return Err(Response::error(
+                                        ErrorCode::InvalidRequest,
+                                        format!("Failed to load image: {}", e),
+                                    ));
                                 }
-                            }
+                            },
                             Err(e) => {
                                 self.active_requests.fetch_sub(1, Ordering::Relaxed);
                                 return Err(Response::error(
@@ -725,12 +721,17 @@ impl Daemon {
 
         // Start streaming generation with vision
         match self
-            .generate_vision_text_streaming(loaded, prompt, bitmaps, max_tokens, temperature, all_stops)
+            .generate_vision_text_streaming(
+                loaded,
+                prompt,
+                bitmaps,
+                max_tokens,
+                temperature,
+                all_stops,
+            )
             .await
         {
-            Ok((rx, prompt_tokens, request_id)) => {
-                Ok((rx, prompt_tokens, request_id, model_alias))
-            }
+            Ok((rx, prompt_tokens, request_id)) => Ok((rx, prompt_tokens, request_id, model_alias)),
             Err(e) => Err(Response::error(ErrorCode::GenerationFailed, e.to_string())),
         }
     }
@@ -770,7 +771,8 @@ impl Daemon {
                 // Tokenize and evaluate chunks (processes images)
                 let chunks = mtmd_context.tokenize(&prompt, &bitmap_refs)?;
                 let n_batch = 512;
-                let _n_past = mtmd_context.eval_chunks(&mut context, &chunks, 0, 0, n_batch, true)?;
+                let _n_past =
+                    mtmd_context.eval_chunks(&mut context, &chunks, 0, 0, n_batch, true)?;
 
                 // Set up sampler
                 let mut sampler_params = SamplerParams::default();
@@ -852,7 +854,11 @@ impl Daemon {
         Ok((rx, 0, request_id))
     }
 
-    pub async fn handle_embeddings(&self, model: Option<String>, input: EmbeddingInput) -> Response {
+    pub async fn handle_embeddings(
+        &self,
+        model: Option<String>,
+        input: EmbeddingInput,
+    ) -> Response {
         // Get the model
         let loaded = match self.models.get(model.as_deref()).await {
             Ok(m) => m,

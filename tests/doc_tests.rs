@@ -451,7 +451,10 @@ mod feature_completeness_tests {
         assert_eq!(params.yarn_orig_ctx, 0);
         assert_eq!(params.defrag_thold, -1.0);
         assert_eq!(params.embeddings, false);
-        assert_eq!(params.flash_attn_type, sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_DISABLED);
+        assert_eq!(
+            params.flash_attn_type,
+            sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_DISABLED
+        );
         assert_eq!(params.offload_kqv, true);
         assert_eq!(params.swa_full, true);
         assert_eq!(params.kv_unified, false);

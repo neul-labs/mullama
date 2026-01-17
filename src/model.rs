@@ -186,7 +186,10 @@ impl Model {
         let vocab_ptr = unsafe { sys::llama_model_get_vocab(model_ptr) };
 
         Ok(Model {
-            inner: Arc::new(ModelInner { model_ptr, vocab_ptr }),
+            inner: Arc::new(ModelInner {
+                model_ptr,
+                vocab_ptr,
+            }),
         })
     }
 
@@ -673,7 +676,10 @@ impl Model {
                 stops.push("<end_of_turn>".to_string());
             }
             // Mistral style
-            if template.contains("[/INST]") && template.contains("</s>") && !stops.contains(&"</s>".to_string()) {
+            if template.contains("[/INST]")
+                && template.contains("</s>")
+                && !stops.contains(&"</s>".to_string())
+            {
                 stops.push("</s>".to_string());
             }
         }

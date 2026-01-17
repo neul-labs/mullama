@@ -956,8 +956,8 @@ fn detect_speech(samples: &[f32]) -> bool {
 // Real mtmd-based multimodal implementation
 //
 
-use std::sync::Arc;
 use std::ffi::CStr;
+use std::sync::Arc;
 
 /// Bitmap wrapper for mtmd_bitmap (holds image or audio data)
 ///
@@ -989,7 +989,10 @@ impl Bitmap {
         if data.len() != expected_len {
             return Err(MullamaError::InvalidInput(format!(
                 "Image data length {} doesn't match expected {} ({}x{}x3)",
-                data.len(), expected_len, width, height
+                data.len(),
+                expected_len,
+                width,
+                height
             )));
         }
 
@@ -1222,8 +1225,7 @@ impl InputChunk {
         }
 
         let mut n_tokens: usize = 0;
-        let tokens_ptr =
-            unsafe { sys::mtmd_input_chunk_get_tokens_text(self.ptr, &mut n_tokens) };
+        let tokens_ptr = unsafe { sys::mtmd_input_chunk_get_tokens_text(self.ptr, &mut n_tokens) };
 
         if tokens_ptr.is_null() || n_tokens == 0 {
             return None;
@@ -1361,9 +1363,7 @@ impl MtmdContext {
             None
         };
 
-        let ptr = unsafe {
-            sys::mtmd_init_from_file(path_c.as_ptr(), model.as_ptr(), sys_params)
-        };
+        let ptr = unsafe { sys::mtmd_init_from_file(path_c.as_ptr(), model.as_ptr(), sys_params) };
 
         if ptr.is_null() {
             return Err(MullamaError::ModelLoadError(format!(
@@ -1432,9 +1432,8 @@ impl MtmdContext {
 
     /// Load a bitmap from a buffer (image or audio file data)
     pub fn bitmap_from_buffer(&self, data: &[u8]) -> Result<Bitmap, MullamaError> {
-        let ptr = unsafe {
-            sys::mtmd_helper_bitmap_init_from_buf(self.ptr, data.as_ptr(), data.len())
-        };
+        let ptr =
+            unsafe { sys::mtmd_helper_bitmap_init_from_buf(self.ptr, data.as_ptr(), data.len()) };
 
         if ptr.is_null() {
             return Err(MullamaError::MultimodalError(
@@ -1457,7 +1456,11 @@ impl MtmdContext {
     /// # Errors
     /// - Returns error if number of bitmaps doesn't match markers
     /// - Returns error if preprocessing fails
-    pub fn tokenize(&mut self, text: &str, bitmaps: &[&Bitmap]) -> Result<InputChunks, MullamaError> {
+    pub fn tokenize(
+        &mut self,
+        text: &str,
+        bitmaps: &[&Bitmap],
+    ) -> Result<InputChunks, MullamaError> {
         let text_c = CString::new(text)
             .map_err(|_| MullamaError::InvalidInput("Text contains null byte".to_string()))?;
 

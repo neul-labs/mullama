@@ -418,7 +418,10 @@ impl MultiVectorGenerator {
     ///
     /// Use this when you've already tokenized the input or need fine control
     /// over tokenization.
-    pub fn embed_tokens(&mut self, tokens: &[TokenId]) -> Result<MultiVectorEmbedding, MullamaError> {
+    pub fn embed_tokens(
+        &mut self,
+        tokens: &[TokenId],
+    ) -> Result<MultiVectorEmbedding, MullamaError> {
         if tokens.is_empty() {
             return Err(MullamaError::InvalidInput(
                 "Cannot embed empty token sequence".to_string(),
@@ -472,7 +475,10 @@ impl MultiVectorGenerator {
     ///
     /// Processes texts sequentially. For parallel processing with rayon,
     /// use multiple generators or the parallel scoring functions.
-    pub fn embed_batch(&mut self, texts: &[&str]) -> Result<Vec<MultiVectorEmbedding>, MullamaError> {
+    pub fn embed_batch(
+        &mut self,
+        texts: &[&str],
+    ) -> Result<Vec<MultiVectorEmbedding>, MullamaError> {
         let mut results = Vec::with_capacity(texts.len());
         for text in texts {
             results.push(self.embed_text(text)?);
@@ -594,7 +600,10 @@ impl LateInteractionScorer {
     ///
     /// # Returns
     /// Normalized score in range `[0, 1]` for normalized embeddings.
-    pub fn max_sim_normalized(query: &MultiVectorEmbedding, document: &MultiVectorEmbedding) -> f32 {
+    pub fn max_sim_normalized(
+        query: &MultiVectorEmbedding,
+        document: &MultiVectorEmbedding,
+    ) -> f32 {
         if query.is_empty() {
             return 0.0;
         }

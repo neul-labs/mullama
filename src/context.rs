@@ -1,10 +1,5 @@
 use crate::{
-    batch::Batch,
-    error::MullamaError,
-    model::Model,
-    sampling::SamplerParams,
-    sys,
-    token::TokenId,
+    batch::Batch, error::MullamaError, model::Model, sampling::SamplerParams, sys, token::TokenId,
 };
 use std::sync::Arc;
 
@@ -154,9 +149,7 @@ impl Context {
     pub fn decode_single(&mut self, token: TokenId) -> Result<(), MullamaError> {
         // Use stack-allocated array and llama_batch_get_one directly
         let mut tokens = [token];
-        let llama_batch = unsafe {
-            sys::llama_batch_get_one(tokens.as_mut_ptr(), 1)
-        };
+        let llama_batch = unsafe { sys::llama_batch_get_one(tokens.as_mut_ptr(), 1) };
         let result = unsafe { sys::llama_decode(self.ctx_ptr, llama_batch) };
         if result != 0 {
             return Err(MullamaError::GenerationError(format!(

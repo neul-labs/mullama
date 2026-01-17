@@ -373,7 +373,7 @@ pub struct mtmd_context_params {
     pub use_gpu: c_bool,
     pub print_timings: c_bool,
     pub n_threads: c_int,
-    pub image_marker: *const c_char,  // deprecated, use media_marker
+    pub image_marker: *const c_char, // deprecated, use media_marker
     pub media_marker: *const c_char,
     pub flash_attn_type: llama_flash_attn_type,
     pub warmup: c_bool,
@@ -1211,10 +1211,7 @@ extern "C" {
         ny: u32,
         data: *const std::os::raw::c_uchar,
     ) -> *mut mtmd_bitmap;
-    pub fn mtmd_bitmap_init_from_audio(
-        n_samples: usize,
-        data: *const c_float,
-    ) -> *mut mtmd_bitmap;
+    pub fn mtmd_bitmap_init_from_audio(n_samples: usize, data: *const c_float) -> *mut mtmd_bitmap;
     pub fn mtmd_bitmap_get_nx(bitmap: *const mtmd_bitmap) -> u32;
     pub fn mtmd_bitmap_get_ny(bitmap: *const mtmd_bitmap) -> u32;
     pub fn mtmd_bitmap_get_data(bitmap: *const mtmd_bitmap) -> *const std::os::raw::c_uchar;
@@ -1265,14 +1262,8 @@ extern "C" {
     ) -> i32;
 
     // Encoding
-    pub fn mtmd_encode(
-        ctx: *mut mtmd_context,
-        image_tokens: *const mtmd_image_tokens,
-    ) -> i32;
-    pub fn mtmd_encode_chunk(
-        ctx: *mut mtmd_context,
-        chunk: *const mtmd_input_chunk,
-    ) -> i32;
+    pub fn mtmd_encode(ctx: *mut mtmd_context, image_tokens: *const mtmd_image_tokens) -> i32;
+    pub fn mtmd_encode_chunk(ctx: *mut mtmd_context, chunk: *const mtmd_input_chunk) -> i32;
     pub fn mtmd_get_output_embd(ctx: *mut mtmd_context) -> *mut c_float;
 
     //

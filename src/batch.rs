@@ -33,9 +33,7 @@ impl Batch {
             };
         }
 
-        let inner = unsafe {
-            sys::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32)
-        };
+        let inner = unsafe { sys::llama_batch_get_one(tokens.as_mut_ptr(), tokens.len() as i32) };
 
         Self {
             inner: Some(inner),

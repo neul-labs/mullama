@@ -141,7 +141,9 @@ impl MessageContent {
     pub fn has_images(&self) -> bool {
         match self {
             MessageContent::Text(_) => false,
-            MessageContent::Parts(parts) => parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. })),
         }
     }
 
@@ -433,9 +435,7 @@ pub enum ResponseFormat {
     JsonObject,
     /// JSON output conforming to a schema
     #[serde(rename = "json_schema")]
-    JsonSchema {
-        json_schema: JsonSchemaSpec,
-    },
+    JsonSchema { json_schema: JsonSchemaSpec },
 }
 
 impl Default for ResponseFormat {

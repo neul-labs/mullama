@@ -788,8 +788,13 @@ async fn run_vision_prompt(
     let start = std::time::Instant::now();
 
     // Read and encode image
-    let image_data = std::fs::read(image_path)
-        .map_err(|e| format!("Failed to read image file '{}': {}", image_path.display(), e))?;
+    let image_data = std::fs::read(image_path).map_err(|e| {
+        format!(
+            "Failed to read image file '{}': {}",
+            image_path.display(),
+            e
+        )
+    })?;
 
     // Detect image type from extension
     let mime_type = match image_path.extension().and_then(|e| e.to_str()) {
@@ -1073,7 +1078,10 @@ fn embed_text(
             println!("Model: {}", result.model);
             println!("Dimension: {}", result.dimension());
             println!("Tokens: {}", result.prompt_tokens);
-            println!("Embedding (first 10): {:?}...", &result.embedding[..result.embedding.len().min(10)]);
+            println!(
+                "Embedding (first 10): {:?}...",
+                &result.embedding[..result.embedding.len().min(10)]
+            );
         }
     } else {
         // Batch embedding

@@ -159,7 +159,8 @@ mod context_integration_tests {
                 n_threads: 1,
                 n_threads_batch: 1,
                 embeddings: false,
-                flash_attn_type: mullama::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_DISABLED,
+                flash_attn_type:
+                    mullama::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_DISABLED,
                 offload_kqv: false,
                 ..Default::default()
             },

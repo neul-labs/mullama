@@ -180,9 +180,7 @@ impl CapabilityRegistry {
             return Ok(());
         }
 
-        for entry in std::fs::read_dir(dir)
-            .map_err(|e| MullamaError::IoError(e))?
-        {
+        for entry in std::fs::read_dir(dir).map_err(|e| MullamaError::IoError(e))? {
             let entry = entry.map_err(|e| MullamaError::IoError(e))?;
             let path = entry.path();
 
@@ -190,7 +188,8 @@ impl CapabilityRegistry {
                 match self.load_config_file(&path) {
                     Ok(config) => {
                         // Remove existing config with same name (user overrides builtin)
-                        self.families.retain(|f| f.family.name != config.family.name);
+                        self.families
+                            .retain(|f| f.family.name != config.family.name);
                         self.families.push(config);
                     }
                     Err(e) => {
@@ -205,13 +204,11 @@ impl CapabilityRegistry {
 
     /// Load a single configuration file
     fn load_config_file(&self, path: &Path) -> Result<ModelFamilyConfig, MullamaError> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| MullamaError::IoError(e))?;
+        let contents = std::fs::read_to_string(path).map_err(|e| MullamaError::IoError(e))?;
 
-        let config: ModelFamilyConfig = toml::from_str(&contents)
-            .map_err(|e| MullamaError::InvalidInput(format!(
-                "Failed to parse {}: {}", path.display(), e
-            )))?;
+        let config: ModelFamilyConfig = toml::from_str(&contents).map_err(|e| {
+            MullamaError::InvalidInput(format!("Failed to parse {}: {}", path.display(), e))
+        })?;
 
         Ok(config)
     }
@@ -221,7 +218,8 @@ impl CapabilityRegistry {
         self.patterns.clear();
 
         // Sort families by priority (descending)
-        self.families.sort_by(|a, b| b.family.priority.cmp(&a.family.priority));
+        self.families
+            .sort_by(|a, b| b.family.priority.cmp(&a.family.priority));
 
         for (idx, family) in self.families.iter().enumerate() {
             for pattern in &family.family.patterns {
@@ -340,7 +338,9 @@ impl CapabilityRegistry {
                 eos: Some("<|eot_id|>".to_string()),
                 user_prefix: Some("<|start_header_id|>user<|end_header_id|>\n\n".to_string()),
                 user_suffix: Some("<|eot_id|>".to_string()),
-                assistant_prefix: Some("<|start_header_id|>assistant<|end_header_id|>\n\n".to_string()),
+                assistant_prefix: Some(
+                    "<|start_header_id|>assistant<|end_header_id|>\n\n".to_string(),
+                ),
                 assistant_suffix: Some("<|eot_id|>".to_string()),
                 system_prefix: Some("<|start_header_id|>system<|end_header_id|>\n\n".to_string()),
                 system_suffix: Some("<|eot_id|>".to_string()),
@@ -350,7 +350,9 @@ impl CapabilityRegistry {
                 style: "llama".to_string(),
                 tool_call_start: Some("<|python_tag|>".to_string()),
                 tool_call_end: None,
-                tool_result_start: Some("<|start_header_id|>ipython<|end_header_id|>\n\n".to_string()),
+                tool_result_start: Some(
+                    "<|start_header_id|>ipython<|end_header_id|>\n\n".to_string(),
+                ),
                 tool_result_end: Some("<|eot_id|>".to_string()),
             }),
             thinking: None,
@@ -597,7 +599,10 @@ fn get_config_dirs() -> Vec<PathBuf> {
 /// Detect capabilities for a model
 ///
 /// This is the main entry point for capability detection.
-pub fn detect_capabilities(model_name: &str, architecture: Option<&str>) -> &'static ModelFamilyConfig {
+pub fn detect_capabilities(
+    model_name: &str,
+    architecture: Option<&str>,
+) -> &'static ModelFamilyConfig {
     registry().detect(model_name, architecture)
 }
 

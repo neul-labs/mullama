@@ -15,8 +15,8 @@ use axum::{
 };
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
-use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt as _;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::protocol::{ChatMessage, EmbeddingInput, Response as ProtoResponse, StreamChunk, Usage};
@@ -367,8 +367,7 @@ async fn chat_completions_stream(
                 }],
             };
 
-            Event::default()
-                .data(serde_json::to_string(&sse_chunk).unwrap_or_default())
+            Event::default().data(serde_json::to_string(&sse_chunk).unwrap_or_default())
         })
         .chain(stream::once(async move {
             // Send final chunk with finish_reason
@@ -386,12 +385,9 @@ async fn chat_completions_stream(
                     finish_reason: Some("stop".to_string()),
                 }],
             };
-            Event::default()
-                .data(serde_json::to_string(&final_chunk).unwrap_or_default())
+            Event::default().data(serde_json::to_string(&final_chunk).unwrap_or_default())
         }))
-        .chain(stream::once(async {
-            Event::default().data("[DONE]")
-        }))
+        .chain(stream::once(async { Event::default().data("[DONE]") }))
         .map(Ok::<_, Infallible>);
 
     Ok(Sse::new(sse_stream)
@@ -458,8 +454,7 @@ async fn chat_completions_vision_stream(
                 }],
             };
 
-            Event::default()
-                .data(serde_json::to_string(&sse_chunk).unwrap_or_default())
+            Event::default().data(serde_json::to_string(&sse_chunk).unwrap_or_default())
         })
         .chain(stream::once(async move {
             // Send final chunk with finish_reason
@@ -477,12 +472,9 @@ async fn chat_completions_vision_stream(
                     finish_reason: Some("stop".to_string()),
                 }],
             };
-            Event::default()
-                .data(serde_json::to_string(&final_chunk).unwrap_or_default())
+            Event::default().data(serde_json::to_string(&final_chunk).unwrap_or_default())
         }))
-        .chain(stream::once(async {
-            Event::default().data("[DONE]")
-        }))
+        .chain(stream::once(async { Event::default().data("[DONE]") }))
         .map(Ok::<_, Infallible>);
 
     Ok(Sse::new(sse_stream)

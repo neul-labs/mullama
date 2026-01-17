@@ -110,12 +110,12 @@ pub mod config;
 pub mod daemon;
 #[cfg(feature = "format-conversion")]
 pub mod format_conversion;
+#[cfg(feature = "late-interaction")]
+pub mod late_interaction;
 #[cfg(feature = "multimodal")]
 pub mod multimodal;
 #[cfg(feature = "parallel")]
 pub mod parallel;
-#[cfg(feature = "late-interaction")]
-pub mod late_interaction;
 #[cfg(feature = "streaming")]
 pub mod streaming;
 #[cfg(feature = "streaming-audio")]
@@ -367,18 +367,17 @@ pub use format_conversion::{
     AudioConversionResult, AudioConverter, AudioConverterConfig, ConversionConfig,
     ImageConversionResult, ImageConverter, ImageConverterConfig,
 };
-#[cfg(feature = "multimodal")]
-pub use multimodal::{
-    AudioFeatures, AudioFormat, AudioInput, Bitmap, ChunkType, ImageInput, InputChunk,
-    InputChunks, MtmdContext, MtmdParams, MultimodalInput, MultimodalOutput, MultimodalProcessor,
-    VideoInput,
-};
-#[cfg(feature = "parallel")]
-pub use parallel::{BatchGenerationConfig, GenerationResult, ParallelProcessor, ThreadPoolConfig};
 #[cfg(feature = "late-interaction")]
 pub use late_interaction::{
     LateInteractionScorer, MultiVectorConfig, MultiVectorEmbedding, MultiVectorGenerator,
 };
+#[cfg(feature = "multimodal")]
+pub use multimodal::{
+    AudioFeatures, AudioFormat, AudioInput, Bitmap, ChunkType, ImageInput, InputChunk, InputChunks,
+    MtmdContext, MtmdParams, MultimodalInput, MultimodalOutput, MultimodalProcessor, VideoInput,
+};
+#[cfg(feature = "parallel")]
+pub use parallel::{BatchGenerationConfig, GenerationResult, ParallelProcessor, ThreadPoolConfig};
 #[cfg(feature = "streaming")]
 pub use streaming::{StreamConfig, TokenData as StreamTokenData, TokenStream};
 #[cfg(feature = "streaming-audio")]
@@ -441,7 +440,9 @@ pub mod prelude {
     pub use crate::{BatchGenerationConfig, ParallelProcessor};
 
     #[cfg(feature = "late-interaction")]
-    pub use crate::{LateInteractionScorer, MultiVectorConfig, MultiVectorEmbedding, MultiVectorGenerator};
+    pub use crate::{
+        LateInteractionScorer, MultiVectorConfig, MultiVectorEmbedding, MultiVectorGenerator,
+    };
 
     #[cfg(feature = "websockets")]
     pub use crate::{WSMessage, WebSocketServer};

@@ -76,7 +76,13 @@ fn run_with_model(model_path: &str) -> Result<(), MullamaError> {
         let score = LateInteractionScorer::max_sim(&query_mv, doc_mv);
         let norm_score = LateInteractionScorer::max_sim_normalized(&query_mv, doc_mv);
 
-        println!("Doc {}: score={:.4}, norm={:.4}, tokens={}", i + 1, score, norm_score, doc_mv.len());
+        println!(
+            "Doc {}: score={:.4}, norm={:.4}, tokens={}",
+            i + 1,
+            score,
+            norm_score,
+            doc_mv.len()
+        );
         println!("   \"{}\"", truncate_str(doc_text, 60));
     }
 
@@ -86,12 +92,7 @@ fn run_with_model(model_path: &str) -> Result<(), MullamaError> {
 
     let top_k = LateInteractionScorer::find_top_k(&query_mv, &doc_mvs, 3);
     for (rank, (idx, score)) in top_k.iter().enumerate() {
-        println!(
-            "  Rank {}: Doc {} (score: {:.4})",
-            rank + 1,
-            idx + 1,
-            score
-        );
+        println!("  Rank {}: Doc {} (score: {:.4})", rank + 1, idx + 1, score);
         println!("     \"{}\"", truncate_str(documents[*idx], 55));
     }
 
@@ -125,13 +126,17 @@ fn run_demo() -> Result<(), MullamaError> {
 
     // Simulate a query with 3 tokens, dimension 4
     let query_data = vec![
-        1.0, 0.0, 0.0, 0.0,  // token 0: "what"
-        0.0, 1.0, 0.0, 0.0,  // token 1: "is"
-        0.5, 0.5, 0.0, 0.0,  // token 2: "learning"
+        1.0, 0.0, 0.0, 0.0, // token 0: "what"
+        0.0, 1.0, 0.0, 0.0, // token 1: "is"
+        0.5, 0.5, 0.0, 0.0, // token 2: "learning"
     ];
     let mut query = MultiVectorEmbedding::new(query_data, 4, Some(vec![100, 200, 300]));
 
-    println!("   Query: {} tokens, {} dimensions", query.len(), query.dimension());
+    println!(
+        "   Query: {} tokens, {} dimensions",
+        query.len(),
+        query.dimension()
+    );
     println!("   Token IDs: {:?}", query.token_ids());
     println!("   Memory: {} bytes", query.size_bytes());
 
@@ -141,24 +146,24 @@ fn run_demo() -> Result<(), MullamaError> {
 
     // Simulate documents
     let doc1_data = vec![
-        1.0, 0.0, 0.0, 0.0,  // Similar to query token 0
-        0.0, 0.0, 1.0, 0.0,  // Different
-        0.6, 0.4, 0.0, 0.0,  // Similar to query token 2
+        1.0, 0.0, 0.0, 0.0, // Similar to query token 0
+        0.0, 0.0, 1.0, 0.0, // Different
+        0.6, 0.4, 0.0, 0.0, // Similar to query token 2
     ];
     let mut doc1 = MultiVectorEmbedding::new(doc1_data, 4, None);
     doc1.normalize();
 
     let doc2_data = vec![
-        0.0, 0.0, 0.0, 1.0,  // Orthogonal to query
-        0.0, 0.0, 1.0, 0.0,  // Different
+        0.0, 0.0, 0.0, 1.0, // Orthogonal to query
+        0.0, 0.0, 1.0, 0.0, // Different
     ];
     let mut doc2 = MultiVectorEmbedding::new(doc2_data, 4, None);
     doc2.normalize();
 
     let doc3_data = vec![
-        0.9, 0.1, 0.0, 0.0,  // Very similar to query token 0
-        0.1, 0.9, 0.0, 0.0,  // Very similar to query token 1
-        0.5, 0.5, 0.0, 0.0,  // Same as query token 2
+        0.9, 0.1, 0.0, 0.0, // Very similar to query token 0
+        0.1, 0.9, 0.0, 0.0, // Very similar to query token 1
+        0.5, 0.5, 0.0, 0.0, // Same as query token 2
     ];
     let mut doc3 = MultiVectorEmbedding::new(doc3_data, 4, None);
     doc3.normalize();
@@ -187,7 +192,12 @@ fn run_demo() -> Result<(), MullamaError> {
     let top_k = LateInteractionScorer::find_top_k(&query, &doc_vec, 2);
 
     for (rank, (idx, score)) in top_k.iter().enumerate() {
-        println!("   Rank {}: Document {} (score: {:.4})", rank + 1, idx + 1, score);
+        println!(
+            "   Rank {}: Document {} (score: {:.4})",
+            rank + 1,
+            idx + 1,
+            score
+        );
     }
 
     // Demonstrate similarity matrix
@@ -205,7 +215,10 @@ fn run_demo() -> Result<(), MullamaError> {
 
     let matches = LateInteractionScorer::best_matches(&query, &doc3);
     for (q_idx, (d_idx, sim)) in matches.iter().enumerate() {
-        println!("   Query token {} -> Doc token {}: similarity {:.4}", q_idx, d_idx, sim);
+        println!(
+            "   Query token {} -> Doc token {}: similarity {:.4}",
+            q_idx, d_idx, sim
+        );
     }
 
     // Demonstrate symmetric scoring
@@ -223,7 +236,13 @@ fn run_demo() -> Result<(), MullamaError> {
 
     let queries = vec![query.clone()];
     let scores = LateInteractionScorer::batch_score(&queries, &doc_vec);
-    println!("   Query 1 vs all docs: {:?}", scores[0].iter().map(|s| format!("{:.2}", s)).collect::<Vec<_>>());
+    println!(
+        "   Query 1 vs all docs: {:?}",
+        scores[0]
+            .iter()
+            .map(|s| format!("{:.2}", s))
+            .collect::<Vec<_>>()
+    );
 
     // Demonstrate config
     println!("\n8. Configuration Options\n");

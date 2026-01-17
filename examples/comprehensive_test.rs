@@ -216,9 +216,18 @@ fn main() -> Result<(), MullamaError> {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║                        TEST SUMMARY                          ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
-    println!("║  Passed: {:2}                                                  ║", passed);
-    println!("║  Failed: {:2}                                                  ║", failed);
-    println!("║  Total:  {:2}                                                  ║", passed + failed);
+    println!(
+        "║  Passed: {:2}                                                  ║",
+        passed
+    );
+    println!(
+        "║  Failed: {:2}                                                  ║",
+        failed
+    );
+    println!(
+        "║  Total:  {:2}                                                  ║",
+        passed + failed
+    );
     println!("╚══════════════════════════════════════════════════════════════╝");
 
     if failed > 0 {
@@ -235,24 +244,28 @@ fn test_tokenization(model: &Arc<Model>) -> Result<(), MullamaError> {
         ("Hello, world!", true),
         ("The quick brown fox", true),
         ("1 + 1 = 2", true),
-        ("", true),  // Empty string
-        ("Hello\nWorld", true),  // With newline
+        ("", true),             // Empty string
+        ("Hello\nWorld", true), // With newline
         ("Special chars: @#$%^&*()", true),
     ];
 
     for (text, add_bos) in test_cases {
         let tokens = model.tokenize(text, add_bos, false)?;
-        println!("  '{}' -> {} tokens",
+        println!(
+            "  '{}' -> {} tokens",
             text.replace('\n', "\\n"),
-            tokens.len());
+            tokens.len()
+        );
 
         // Verify BOS token if requested
         if add_bos && !text.is_empty() {
             let bos = model.token_bos();
             if tokens.first() != Some(&bos) {
-                return Err(MullamaError::TokenizationError(
-                    format!("Expected BOS token {} at start, got {:?}", bos, tokens.first())
-                ));
+                return Err(MullamaError::TokenizationError(format!(
+                    "Expected BOS token {} at start, got {:?}",
+                    bos,
+                    tokens.first()
+                )));
             }
         }
     }
@@ -275,9 +288,10 @@ fn test_detokenization(model: &Arc<Model>) -> Result<(), MullamaError> {
 
     // Check they match
     if recovered != original {
-        return Err(MullamaError::TokenizationError(
-            format!("Mismatch: '{}' != '{}'", recovered, original)
-        ));
+        return Err(MullamaError::TokenizationError(format!(
+            "Mismatch: '{}' != '{}'",
+            recovered, original
+        )));
     }
 
     Ok(())
@@ -304,9 +318,10 @@ fn test_roundtrip(model: &Arc<Model>) -> Result<(), MullamaError> {
             println!("    Recovered: '{}'", recovered);
             // Don't fail on Unicode issues - just warn
             if original.is_ascii() {
-                return Err(MullamaError::TokenizationError(
-                    format!("ASCII roundtrip failed: '{}' != '{}'", recovered, original)
-                ));
+                return Err(MullamaError::TokenizationError(format!(
+                    "ASCII roundtrip failed: '{}' != '{}'",
+                    recovered, original
+                )));
             }
         } else {
             println!("  OK: '{}'", original.replace('\n', "\\n"));
@@ -341,7 +356,7 @@ fn test_basic_generation(model: &Arc<Model>) -> Result<(), MullamaError> {
     // Verify we got some output
     if generated.is_empty() {
         return Err(MullamaError::GenerationError(
-            "Generated empty output".to_string()
+            "Generated empty output".to_string(),
         ));
     }
 
@@ -398,7 +413,7 @@ fn test_greedy_generation(model: &Arc<Model>) -> Result<(), MullamaError> {
         // Use very low temperature for near-deterministic output
         let params = SamplerParams {
             temperature: 0.01,
-            top_k: 1,  // Greedy
+            top_k: 1, // Greedy
             seed: 42,
             ..Default::default()
         };
@@ -449,7 +464,7 @@ fn test_streaming_generation(model: &Arc<Model>) -> Result<(), MullamaError> {
 
     if token_count == 0 {
         return Err(MullamaError::GenerationError(
-            "No tokens were streamed".to_string()
+            "No tokens were streamed".to_string(),
         ));
     }
 
@@ -489,9 +504,10 @@ fn test_streaming_early_stop(model: &Arc<Model>) -> Result<(), MullamaError> {
     println!("  Stopped after {} tokens", token_count);
 
     if token_count > stop_after {
-        return Err(MullamaError::GenerationError(
-            format!("Should have stopped after {} tokens, got {}", stop_after, token_count)
-        ));
+        return Err(MullamaError::GenerationError(format!(
+            "Should have stopped after {} tokens, got {}",
+            stop_after, token_count
+        )));
     }
 
     Ok(())
@@ -516,7 +532,11 @@ fn test_logits_access(model: &Arc<Model>) -> Result<(), MullamaError> {
 
     // Access logits
     let logits = context.logits()?;
-    println!("  Logits size: {} (vocab size: {})", logits.len(), model.vocab_size());
+    println!(
+        "  Logits size: {} (vocab size: {})",
+        logits.len(),
+        model.vocab_size()
+    );
 
     // Find top 5 tokens
     let mut indexed: Vec<(usize, f32)> = logits.iter().cloned().enumerate().collect();
@@ -525,16 +545,20 @@ fn test_logits_access(model: &Arc<Model>) -> Result<(), MullamaError> {
     println!("  Top 5 next tokens:");
     for (idx, logit) in indexed.iter().take(5) {
         let token_str = model.token_to_str(*idx as i32, 0, false)?;
-        println!("    {} (id={}, logit={:.2})",
+        println!(
+            "    {} (id={}, logit={:.2})",
             token_str.replace('\n', "\\n"),
             idx,
-            logit);
+            logit
+        );
     }
 
     if logits.len() != model.vocab_size() as usize {
-        return Err(MullamaError::GenerationError(
-            format!("Logits size {} != vocab size {}", logits.len(), model.vocab_size())
-        ));
+        return Err(MullamaError::GenerationError(format!(
+            "Logits size {} != vocab size {}",
+            logits.len(),
+            model.vocab_size()
+        )));
     }
 
     Ok(())
@@ -574,10 +598,34 @@ fn test_sampling_variations(model: &Arc<Model>) -> Result<(), MullamaError> {
     let tokens = model.tokenize(prompt, true, false)?;
 
     let configs = vec![
-        ("top_k=10", SamplerParams { top_k: 10, ..Default::default() }),
-        ("top_p=0.5", SamplerParams { top_p: 0.5, ..Default::default() }),
-        ("min_p=0.1", SamplerParams { min_p: 0.1, ..Default::default() }),
-        ("typical_p=0.9", SamplerParams { typical_p: 0.9, ..Default::default() }),
+        (
+            "top_k=10",
+            SamplerParams {
+                top_k: 10,
+                ..Default::default()
+            },
+        ),
+        (
+            "top_p=0.5",
+            SamplerParams {
+                top_p: 0.5,
+                ..Default::default()
+            },
+        ),
+        (
+            "min_p=0.1",
+            SamplerParams {
+                min_p: 0.1,
+                ..Default::default()
+            },
+        ),
+        (
+            "typical_p=0.9",
+            SamplerParams {
+                typical_p: 0.9,
+                ..Default::default()
+            },
+        ),
     ];
 
     for (name, params) in configs {
@@ -613,7 +661,7 @@ fn test_repetition_penalty(model: &Arc<Model>) -> Result<(), MullamaError> {
         let mut context = Context::new(model.clone(), ctx_params)?;
 
         let params = SamplerParams {
-            penalty_repeat: 1.0,  // No penalty
+            penalty_repeat: 1.0, // No penalty
             ..Default::default()
         };
 
@@ -632,7 +680,7 @@ fn test_repetition_penalty(model: &Arc<Model>) -> Result<(), MullamaError> {
         let mut context = Context::new(model.clone(), ctx_params)?;
 
         let params = SamplerParams {
-            penalty_repeat: 1.5,  // Strong penalty
+            penalty_repeat: 1.5, // Strong penalty
             penalty_last_n: 64,
             ..Default::default()
         };
@@ -709,7 +757,7 @@ fn test_edge_cases(model: &Arc<Model>) -> Result<(), MullamaError> {
             }
             Ok(_) => {
                 return Err(MullamaError::GenerationError(
-                    "Should have rejected empty tokens".to_string()
+                    "Should have rejected empty tokens".to_string(),
                 ));
             }
             Err(e) => {
@@ -748,7 +796,7 @@ fn test_context_reuse(model: &Arc<Model>) -> Result<(), MullamaError> {
     // Verify both worked
     if gen1.is_empty() || gen2.is_empty() {
         return Err(MullamaError::GenerationError(
-            "Context reuse failed".to_string()
+            "Context reuse failed".to_string(),
         ));
     }
 
@@ -782,7 +830,7 @@ fn test_long_prompt(model: &Arc<Model>) -> Result<(), MullamaError> {
 
     if generated.is_empty() {
         return Err(MullamaError::GenerationError(
-            "Long prompt generation failed".to_string()
+            "Long prompt generation failed".to_string(),
         ));
     }
 

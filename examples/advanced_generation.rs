@@ -43,7 +43,7 @@ fn main() -> Result<(), MullamaError> {
         n_threads_batch: 8, // Batch processing threads
         embeddings: true,   // Enable embeddings
         flash_attn_type: mullama::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_ENABLED,
-        offload_kqv: true,  // Offload KV operations to GPU
+        offload_kqv: true, // Offload KV operations to GPU
         ..Default::default()
     };
 
