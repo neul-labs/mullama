@@ -20,6 +20,7 @@ include = [
     "src/**/*",
     "examples/**/*",
     "tests/**/*",
+    "configs/modelfiles/**/*",
     "build.rs",
     "wrapper.h",
     "Cargo.toml",
@@ -63,6 +64,13 @@ tempfile = "3.0"
 dirs = "5.0"
 mimalloc = { version = "0.1", default-features = false }
 sha2 = "0.10"
+
+# Rust-specific performance optimizations
+dashmap = "5.5"                                          # Lock-free concurrent HashMap
+smallvec = { version = "1.11", features = ["union"] }    # Stack-allocated small vectors
+parking_lot = "0.12"                                     # Faster mutexes than std
+bumpalo = "3.14"                                         # Arena allocator for batch ops
+rkyv = { version = "0.7", features = ["validation", "strict"] }  # Zero-copy serialization
 
 # Async support
 tokio = { version = "1.0", features = ["full"], optional = true }

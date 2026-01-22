@@ -1,0 +1,25 @@
+# Gemma 2 9B Instruct - Google's capable model
+# Strong reasoning and instruction following
+
+FROM hf:bartowski/gemma-2-9b-it-GGUF:gemma-2-9b-it-Q4_K_M.gguf
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 8192
+PARAMETER stop "<end_of_turn>"
+
+SYSTEM """You are a helpful AI assistant."""
+
+TEMPLATE """<bos><start_of_turn>user
+{{ if .System }}{{ .System }}
+
+{{ end }}{{ .Prompt }}<end_of_turn>
+<start_of_turn>model
+"""
+
+GPU_LAYERS 0
+CAPABILITY json true
+CAPABILITY tools true
+CAPABILITY thinking false
+CAPABILITY vision false

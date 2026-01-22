@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useModels } from '@/composables/useModels'
 import ModelCard from '@/components/ModelCard.vue'
+import { management, type DefaultModel } from '@/api/client'
 
 const { models, localModels, loading, error, fetchModels, fetchLocalModels, pullModel, deleteModel, loadModel, unloadModel } = useModels()
 
@@ -14,18 +15,26 @@ const deleteConfirm = ref<string | null>(null)
 const loadingModel = ref<string | null>(null)
 const loadError = ref<string | null>(null)
 
-const popularModels = [
-  { name: 'llama3.2:1b', description: 'Lightweight, fast model for basic tasks' },
-  { name: 'llama3.2:3b', description: 'Balanced performance and quality' },
-  { name: 'qwen2.5:7b', description: 'Strong multilingual capabilities' },
-  { name: 'deepseek-r1:7b', description: 'Advanced reasoning model' },
-  { name: 'mistral:7b', description: 'Excellent for coding tasks' },
-  { name: 'phi3:mini', description: 'Microsoft\'s small language model' },
-]
+// Default models from API
+const defaultModels = ref<DefaultModel[]>([])
+const defaultsLoading = ref(false)
+const usingDefault = ref<string | null>(null)
+
+const fetchDefaults = async () => {
+  defaultsLoading.value = true
+  try {
+    defaultModels.value = await management.listDefaults()
+  } catch (e) {
+    console.error('Failed to fetch defaults:', e)
+  } finally {
+    defaultsLoading.value = false
+  }
+}
 
 onMounted(() => {
   fetchModels()
   fetchLocalModels()
+  fetchDefaults()
 })
 
 const handlePull = async () => {
@@ -66,6 +75,25 @@ const handleDelete = async (name: string) => {
 const quickPull = (name: string) => {
   pullModelName.value = name
   showPullModal.value = true
+}
+
+const handleUseDefault = async (name: string) => {
+  usingDefault.value = name
+  loadError.value = null
+  try {
+    const result = await management.useDefault(name)
+    if (!result.success) {
+      loadError.value = result.message
+    } else {
+      // Refresh model lists
+      await fetchModels()
+      await fetchLocalModels()
+    }
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : 'Failed to load model'
+  } finally {
+    usingDefault.value = null
+  }
 }
 
 const handleLoad = async (name: string) => {
@@ -206,24 +234,62 @@ const handleUnload = async (name: string) => {
       </div>
     </div>
 
-    <!-- Popular Models -->
+    <!-- Get Started - Default Models -->
     <div class="mb-8">
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Popular Models</h2>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        Get Started
+        <span class="text-sm font-normal text-gray-500 ml-2">Click to download and use</span>
+      </h2>
+      <div v-if="defaultsLoading" class="text-gray-500 dark:text-gray-400">Loading available models...</div>
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <div
-          v-for="model in popularModels"
+          v-for="model in defaultModels"
           :key="model.name"
-          class="card p-4 hover:border-primary-300 dark:hover:border-primary-700 cursor-pointer transition-colors"
-          @click="quickPull(model.name)"
+          class="card p-4 hover:border-primary-300 dark:hover:border-primary-700 transition-colors"
         >
-          <div class="flex items-start justify-between">
-            <div>
+          <div class="flex flex-col h-full">
+            <div class="flex items-start justify-between mb-2">
               <h3 class="font-medium text-gray-900 dark:text-white">{{ model.name }}</h3>
-              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">{{ model.description }}</p>
+              <span class="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-gray-600 dark:text-gray-400">
+                {{ model.size_hint }}
+              </span>
             </div>
-            <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <p class="text-sm text-gray-500 dark:text-gray-400 flex-1">{{ model.description }}</p>
+            <!-- Capability badges -->
+            <div class="flex flex-wrap gap-1 mt-2 mb-3">
+              <span v-if="model.has_thinking" class="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded">
+                Reasoning
+              </span>
+              <span v-if="model.has_vision" class="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded">
+                Vision
+              </span>
+              <span v-if="model.has_tools" class="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">
+                Tools
+              </span>
+              <span v-for="tag in model.tags.slice(0, 2)" :key="tag" class="text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                {{ tag }}
+              </span>
+            </div>
+            <!-- Action button -->
+            <button
+              @click="handleUseDefault(model.name)"
+              :disabled="usingDefault === model.name"
+              class="w-full btn btn-primary text-sm py-2"
+            >
+              <span v-if="usingDefault === model.name" class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Downloading...
+              </span>
+              <span v-else class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Use Model
+              </span>
+            </button>
           </div>
         </div>
       </div>

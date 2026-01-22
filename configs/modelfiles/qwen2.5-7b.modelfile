@@ -1,0 +1,33 @@
+# Qwen 2.5 7B Instruct - Multilingual with tool support
+# Alibaba's instruction-tuned multilingual model
+
+FROM hf:Qwen/Qwen2.5-7B-Instruct-GGUF:qwen2.5-7b-instruct-q4_k_m.gguf
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 32768
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|endoftext|>"
+
+SYSTEM """You are Qwen, a helpful AI assistant created by Alibaba Cloud."""
+
+TEMPLATE """<|im_start|>system
+{{ .System }}<|im_end|>
+<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+"""
+
+GPU_LAYERS 0
+
+TOOLFORMAT style qwen
+TOOLFORMAT call_start "<tool_call>"
+TOOLFORMAT call_end "</tool_call>"
+TOOLFORMAT result_start "<tool_response>"
+TOOLFORMAT result_end "</tool_response>"
+
+CAPABILITY json true
+CAPABILITY tools true
+CAPABILITY thinking false
+CAPABILITY vision false

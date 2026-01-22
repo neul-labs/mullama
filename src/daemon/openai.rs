@@ -20,7 +20,7 @@ use tokio_stream::StreamExt as _;
 use tower_http::cors::{Any, CorsLayer};
 
 use super::anthropic::messages_handler;
-use super::protocol::{ChatMessage, EmbeddingInput, Response as ProtoResponse, Usage};
+use super::protocol::{ChatMessage, EmbeddingInput, Response as ProtoResponse, ResponseFormat, Usage};
 use super::server::Daemon;
 
 /// Shared state for the HTTP server
@@ -51,6 +51,9 @@ pub fn create_openai_router(daemon: Arc<Daemon>) -> Router {
         .route("/api/models/:name", get(api_get_model))
         // System API
         .route("/api/system/status", get(api_system_status))
+        // Default models API
+        .route("/api/defaults", get(api_list_defaults))
+        .route("/api/defaults/:name/use", post(api_use_default))
         // Health and status
         .route("/health", get(health))
         .route("/status", get(status))
@@ -88,6 +91,9 @@ pub struct ChatCompletionRequest {
     pub frequency_penalty: Option<f32>,
     #[serde(default)]
     pub user: Option<String>,
+    /// Response format for structured outputs (JSON Schema validation)
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
 }
 
 /// Chat completion response
@@ -299,7 +305,7 @@ async fn chat_completions(
         temperature: req.temperature,
         stream: false,
         stop: req.stop.unwrap_or_default(),
-        response_format: None,
+        response_format: req.response_format,
         tools: None,
         tool_choice: None,
         thinking: None,
@@ -542,7 +548,7 @@ async fn completions(
 
 /// GET /v1/models
 async fn list_models(State(daemon): State<AppState>) -> Json<ModelsResponse> {
-    let models = daemon.models.list().await;
+    let models = daemon.models.list();
 
     Json(ModelsResponse {
         object: "list".to_string(),
@@ -610,8 +616,8 @@ async fn health() -> &'static str {
 
 /// GET /status
 async fn status(State(daemon): State<AppState>) -> Json<serde_json::Value> {
-    let models = daemon.models.list().await;
-    let default = daemon.models.default_alias().await;
+    let models = daemon.models.list();
+    let default = daemon.models.default_alias();
 
     Json(serde_json::json!({
         "status": "running",
@@ -638,7 +644,7 @@ async fn status(State(daemon): State<AppState>) -> Json<serde_json::Value> {
 
 /// Prometheus-compatible metrics endpoint
 async fn metrics(State(daemon): State<AppState>) -> impl IntoResponse {
-    let models = daemon.models.list().await;
+    let models = daemon.models.list();
     let uptime = daemon.start_time.elapsed().as_secs();
     let total_requests = daemon.total_requests.load(std::sync::atomic::Ordering::Relaxed);
     let active_requests = daemon.active_requests.load(std::sync::atomic::Ordering::Relaxed);
@@ -805,7 +811,7 @@ async fn api_list_models(State(daemon): State<AppState>) -> Json<serde_json::Val
     }
 
     // Get loaded models
-    let loaded = daemon.models.list().await;
+    let loaded = daemon.models.list();
     for (alias, info, is_default, active_requests) in loaded {
         // Check if already in list
         let already_listed = models.iter().any(|m| {
@@ -818,7 +824,7 @@ async fn api_list_models(State(daemon): State<AppState>) -> Json<serde_json::Val
         if already_listed {
             // Update the existing entry to mark it as loaded
             for model in &mut models {
-                if model.get("path").and_then(|p| p.as_str()) == Some(&info.path) {
+                if model.get("path").and_then(|p| p.as_str()) == Some(info.path.as_str()) {
                     model["loaded"] = serde_json::json!(true);
                     model["is_default"] = serde_json::json!(is_default);
                     model["active_requests"] = serde_json::json!(active_requests);
@@ -1055,7 +1061,7 @@ async fn api_get_model(
     use super::hf::HfDownloader;
 
     // Check if model is loaded
-    let loaded = daemon.models.list().await;
+    let loaded = daemon.models.list();
     for (alias, info, is_default, active_requests) in &loaded {
         if alias == &name {
             return Ok(Json(serde_json::json!({
@@ -1338,7 +1344,7 @@ pub struct SystemStatus {
 
 /// Get system status
 async fn api_system_status(State(daemon): State<AppState>) -> Json<SystemStatus> {
-    let models = daemon.models.list().await;
+    let models = daemon.models.list();
     let uptime = daemon.start_time.elapsed().as_secs();
 
     let http_endpoint = daemon.config.http_port.map(|port| {
@@ -1351,6 +1357,165 @@ async fn api_system_status(State(daemon): State<AppState>) -> Json<SystemStatus>
         models_loaded: models.len(),
         http_endpoint,
     })
+}
+
+// ==================== Default Models API ====================
+
+/// Response for listing default models
+#[derive(Debug, Serialize)]
+struct DefaultsResponse {
+    models: Vec<super::defaults::DefaultModelInfo>,
+}
+
+/// Response for using a default model
+#[derive(Debug, Serialize)]
+struct UseDefaultResponse {
+    success: bool,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<serde_json::Value>,
+}
+
+/// List all available default model templates
+async fn api_list_defaults() -> Json<DefaultsResponse> {
+    let infos = super::defaults::list_default_infos();
+    Json(DefaultsResponse { models: infos })
+}
+
+/// Use a default model (download if needed and load)
+async fn api_use_default(
+    State(daemon): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<UseDefaultResponse>, (StatusCode, Json<UseDefaultResponse>)> {
+    use super::defaults::get_default;
+    use super::hf::{HfDownloader, HfModelSpec};
+
+    // Get the default model
+    let default = get_default(&name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Default model '{}' not found", name),
+                model: None,
+            }),
+        )
+    })?;
+
+    // Parse the FROM directive to get the HuggingFace spec
+    let from = &default.modelfile.from;
+
+    // Check if it's a HuggingFace model
+    if !from.starts_with("hf:") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Default model '{}' is not a HuggingFace model", name),
+                model: None,
+            }),
+        ));
+    }
+
+    let spec = HfModelSpec::parse(from).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Invalid HuggingFace spec in modelfile: {}", from),
+                model: None,
+            }),
+        )
+    })?;
+
+    // Initialize downloader
+    let downloader = HfDownloader::new().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Failed to initialize downloader: {}", e),
+                model: None,
+            }),
+        )
+    })?;
+
+    // Download the model (will use cache if already downloaded)
+    let model_path = downloader.download_spec(&spec, false).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Failed to download model: {}", e),
+                model: None,
+            }),
+        )
+    })?;
+
+    // Extract parameters from the modelfile
+    let context_size = default
+        .modelfile
+        .parameters
+        .get("num_ctx")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(4096) as u32;
+
+    let gpu_layers = default.modelfile.gpu_layers.unwrap_or(0);
+
+    // Get mmproj path for vision models
+    let mmproj_path = default.modelfile.vision_projector.as_ref().map(|p| {
+        // If it's a relative path, resolve it relative to the model directory
+        if p.is_relative() {
+            model_path.parent()
+                .map(|parent| parent.join(p).display().to_string())
+                .unwrap_or_else(|| p.display().to_string())
+        } else {
+            p.display().to_string()
+        }
+    });
+
+    // Load the model
+    let load_config = super::models::ModelLoadConfig {
+        path: model_path.display().to_string(),
+        alias: name.clone(),
+        context_size,
+        gpu_layers,
+        threads: num_cpus::get() as i32,
+        mmproj_path,
+    };
+
+    daemon.models.load(load_config).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(UseDefaultResponse {
+                success: false,
+                message: format!("Failed to load model: {}", e),
+                model: None,
+            }),
+        )
+    })?;
+
+    // Set as default model
+    daemon.models.set_default(&name);
+
+    // Get the model info
+    let model_info = daemon.models.get(Some(name.as_str())).await.ok().map(|_m| {
+        serde_json::json!({
+            "alias": name,
+            "path": model_path.display().to_string(),
+            "context_size": context_size,
+            "gpu_layers": gpu_layers,
+            "description": default.info.description,
+            "has_thinking": default.info.has_thinking,
+            "has_vision": default.info.has_vision,
+        })
+    });
+
+    Ok(Json(UseDefaultResponse {
+        success: true,
+        message: format!("Model '{}' is now ready to use", name),
+        model: model_info,
+    }))
 }
 
 // ==================== Embedded Web UI ====================

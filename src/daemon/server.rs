@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use super::models::{ModelLoadConfig, ModelManager, RequestGuard};
 use super::protocol::*;
 use crate::embedding::{EmbeddingConfig, EmbeddingGenerator};
+use crate::memory_monitor::{MemoryConfig, MemoryMonitor, MemoryPressure, RecoveryManager};
 use crate::{MullamaError, SamplerParams};
 
 /// Daemon server configuration
@@ -28,6 +29,10 @@ pub struct DaemonConfig {
     pub default_gpu_layers: i32,
     /// Number of threads per model
     pub threads_per_model: i32,
+    /// Memory monitoring configuration
+    pub memory_config: MemoryConfig,
+    /// Enable memory monitoring
+    pub enable_memory_monitoring: bool,
 }
 
 impl Default for DaemonConfig {
@@ -39,6 +44,8 @@ impl Default for DaemonConfig {
             default_context_size: 4096,
             default_gpu_layers: 0,
             threads_per_model: (num_cpus::get() / 2).max(1) as i32,
+            memory_config: MemoryConfig::default(),
+            enable_memory_monitoring: true,
         }
     }
 }
@@ -51,11 +58,31 @@ pub struct Daemon {
     pub shutdown: Arc<AtomicBool>,
     pub active_requests: AtomicU32,
     pub total_requests: AtomicU64,
+    /// Memory monitor for tracking system and GPU memory
+    pub memory_monitor: Option<Arc<MemoryMonitor>>,
+    /// Recovery manager for handling OOM situations
+    pub recovery_manager: RecoveryManager,
 }
 
 impl Daemon {
     /// Create a new daemon
     pub fn new(config: DaemonConfig) -> Self {
+        // Initialize memory monitor if enabled
+        let memory_monitor = if config.enable_memory_monitoring {
+            let monitor = MemoryMonitor::new(config.memory_config.clone());
+            monitor.start(); // Start background monitoring
+            Some(monitor)
+        } else {
+            None
+        };
+
+        // Create recovery manager with monitor if available
+        let recovery_manager = if let Some(ref monitor) = memory_monitor {
+            RecoveryManager::new().with_monitor(Arc::clone(monitor))
+        } else {
+            RecoveryManager::new()
+        };
+
         Self {
             config,
             models: Arc::new(ModelManager::new()),
@@ -63,6 +90,8 @@ impl Daemon {
             shutdown: Arc::new(AtomicBool::new(false)),
             active_requests: AtomicU32::new(0),
             total_requests: AtomicU64::new(0),
+            memory_monitor,
+            recovery_manager,
         }
     }
 
@@ -99,13 +128,21 @@ impl Daemon {
                 temperature,
                 stream,
                 stop,
-                response_format: _,
+                response_format,
                 tools: _,
                 tool_choice: _,
                 thinking: _,
             } => {
-                self.handle_chat_completion(model, messages, max_tokens, temperature, stream, stop)
-                    .await
+                self.handle_chat_completion(
+                    model,
+                    messages,
+                    max_tokens,
+                    temperature,
+                    stream,
+                    stop,
+                    response_format,
+                )
+                .await
             }
 
             Request::Completion {
@@ -136,12 +173,28 @@ impl Daemon {
     }
 
     async fn handle_status(&self) -> Response {
-        let default_model = self.models.default_alias().await;
+        let default_model = self.models.default_alias();
+
+        // Get memory stats from monitor if available
+        let memory_used_mb = self
+            .memory_monitor
+            .as_ref()
+            .map(|m| {
+                let stats = m.stats();
+                // Use GPU memory if available, otherwise system memory
+                let used = if stats.gpu_total > 0 {
+                    stats.gpu_used
+                } else {
+                    stats.system_used
+                };
+                (used / (1024 * 1024)) as u64
+            })
+            .unwrap_or(0);
 
         Response::Status(DaemonStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime_secs: self.start_time.elapsed().as_secs(),
-            models_loaded: self.models.count().await,
+            models_loaded: self.models.count(),
             default_model,
             http_endpoint: self
                 .config
@@ -152,14 +205,14 @@ impl Daemon {
                 requests_total: self.total_requests.load(Ordering::Relaxed),
                 tokens_generated: self.models.total_tokens(),
                 active_requests: self.active_requests.load(Ordering::Relaxed),
-                memory_used_mb: 0, // TODO
+                memory_used_mb,
                 gpu_available: crate::supports_gpu_offload(),
             },
         })
     }
 
     async fn handle_list_models(&self) -> Response {
-        let models = self.models.list().await;
+        let models = self.models.list();
         Response::Models(
             models
                 .into_iter()
@@ -261,6 +314,7 @@ impl Daemon {
         temperature: f32,
         _stream: bool,
         stop: Vec<String>,
+        response_format: Option<ResponseFormat>,
     ) -> Response {
         // Get model
         let loaded = match self.models.get(model.as_deref()).await {
@@ -280,7 +334,14 @@ impl Daemon {
 
         // Generate
         let result = self
-            .generate_text(&loaded, &prompt, max_tokens, temperature, &all_stops)
+            .generate_text(
+                &loaded,
+                &prompt,
+                max_tokens,
+                temperature,
+                &all_stops,
+                response_format.as_ref(),
+            )
             .await;
 
         self.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -337,7 +398,7 @@ impl Daemon {
         self.active_requests.fetch_add(1, Ordering::Relaxed);
 
         let result = self
-            .generate_text(&loaded, &prompt, max_tokens, temperature, &[])
+            .generate_text(&loaded, &prompt, max_tokens, temperature, &[], None)
             .await;
 
         self.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -565,8 +626,8 @@ impl Daemon {
         temperature: f32,
         stop_sequences: &[String],
     ) -> Result<(String, u32, u32), MullamaError> {
-        // Get locks on context and mtmd_context
-        let mut ctx_guard = loaded.context.write().await;
+        // Get locks on context and mtmd_context (uses context pool for concurrent requests)
+        let mut ctx_guard = loaded.acquire_context().await;
         let mut mtmd_guard = loaded.mtmd_context.as_ref().unwrap().write().await;
 
         let model = loaded.model.clone();
@@ -747,8 +808,9 @@ impl Daemon {
         temperature: f32,
         stop_sequences: Vec<String>,
     ) -> Result<(mpsc::Receiver<StreamChunk>, u32, String), MullamaError> {
+        // Generate request ID - use Arc<str> for zero-copy sharing across all chunks
         let request_id = generate_completion_id();
-        let request_id_clone = request_id.clone();
+        let request_id_arc: Arc<str> = Arc::from(request_id.as_str());
         let (tx, rx) = mpsc::channel::<StreamChunk>(32);
 
         let model = loaded.model.clone();
@@ -758,7 +820,7 @@ impl Daemon {
         // We need to get both locks, process images, then stream text generation
 
         tokio::spawn(async move {
-            let mut context = loaded.context.write().await;
+            let mut context = loaded.acquire_context().await;
             let mut mtmd_context = loaded.mtmd_context.as_ref().unwrap().write().await;
 
             let result = tokio::task::block_in_place(|| {
@@ -808,10 +870,12 @@ impl Daemon {
                                     if stop_pos_in_text > 0 {
                                         let partial = &final_text[..stop_pos_in_text];
                                         let chunk = StreamChunk {
-                                            request_id: request_id_clone.clone(),
+                                            request_id: request_id_arc.clone(),
                                             index,
                                             delta: partial.to_string(),
                                             token_id: next_token,
+                                            thinking: None,
+                                            tool_calls: None,
                                         };
                                         let _ = tx.blocking_send(chunk);
                                     }
@@ -822,7 +886,7 @@ impl Daemon {
 
                         // Send chunk
                         let chunk = StreamChunk {
-                            request_id: request_id_clone.clone(),
+                            request_id: request_id_arc.clone(),
                             index,
                             delta: text,
                             token_id: next_token,
@@ -995,14 +1059,40 @@ impl Daemon {
         max_tokens: u32,
         temperature: f32,
         stop_sequences: &[String],
+        response_format: Option<&ResponseFormat>,
     ) -> Result<(String, u32, u32), crate::MullamaError> {
         // Tokenize - respect model's BOS token setting to avoid double BOS
         let add_bos = loaded.model.add_bos_token();
         let tokens = loaded.model.tokenize(prompt, add_bos, false)?;
         let prompt_tokens = tokens.len() as u32;
 
-        // Get context lock
-        let mut context = loaded.context.write().await;
+        // Convert response_format to grammar string if needed
+        let grammar_gbnf = match response_format {
+            Some(ResponseFormat::JsonSchema { json_schema }) => {
+                // Convert JSON Schema to GBNF grammar
+                match crate::structured_output::JsonSchemaConverter::convert(&json_schema.schema) {
+                    Ok(grammar) => Some(grammar.to_gbnf()),
+                    Err(e) => {
+                        eprintln!("[WARN] Failed to convert JSON schema to grammar: {}", e);
+                        None
+                    }
+                }
+            }
+            Some(ResponseFormat::JsonObject) => {
+                // Use generic JSON grammar
+                match crate::grammar::presets::json() {
+                    Ok(grammar) => Some(grammar.to_gbnf()),
+                    Err(e) => {
+                        eprintln!("[WARN] Failed to create JSON grammar: {}", e);
+                        None
+                    }
+                }
+            }
+            Some(ResponseFormat::Text) | None => None,
+        };
+
+        // Acquire context from pool (allows concurrent requests via round-robin selection)
+        let mut context = loaded.acquire_context().await;
 
         // Run CPU-bound generation in a blocking context to not block the async runtime
         // block_in_place allows blocking while keeping the current task context
@@ -1019,6 +1109,13 @@ impl Daemon {
             sampler_params.top_p = 0.9;
             sampler_params.top_k = 40;
             let mut sampler = sampler_params.build_chain(model.clone())?;
+
+            // Add grammar sampler if response_format requires it
+            if let Some(gbnf) = &grammar_gbnf {
+                let grammar_sampler =
+                    crate::sampling::Sampler::grammar(model.clone(), gbnf, "root")?;
+                sampler.add(grammar_sampler);
+            }
 
             // Decode prompt
             context.decode(&tokens)?;
@@ -1078,9 +1175,10 @@ impl Daemon {
         let tokens = loaded.model.tokenize(&prompt, add_bos, false)?;
         let prompt_tokens = tokens.len() as u32;
 
-        // Generate request ID
+        // Generate request ID - use Arc<str> for zero-copy sharing across all chunks
+        // This is a Rust-exclusive optimization: in Go, each chunk would clone the string
         let request_id = generate_completion_id();
-        let request_id_clone = request_id.clone();
+        let request_id_arc: Arc<str> = Arc::from(request_id.as_str());
 
         // Create channel for streaming chunks
         let (tx, rx) = mpsc::channel::<StreamChunk>(32);
@@ -1091,8 +1189,8 @@ impl Daemon {
 
         // Spawn the generation task
         tokio::spawn(async move {
-            // Get context lock
-            let mut context = loaded.context.write().await;
+            // Acquire context from pool (enables concurrent streaming to same model)
+            let mut context = loaded.acquire_context().await;
 
             // Run CPU-bound generation in blocking context
             let result = tokio::task::block_in_place(|| {
@@ -1135,7 +1233,7 @@ impl Daemon {
                                         // Send the part before the stop sequence
                                         let partial = &final_text[..stop_pos_in_text];
                                         let chunk = StreamChunk {
-                                            request_id: request_id_clone.clone(),
+                                            request_id: request_id_arc.clone(),
                                             index,
                                             delta: partial.to_string(),
                                             token_id: next_token,
@@ -1151,7 +1249,7 @@ impl Daemon {
 
                         // Send chunk
                         let chunk = StreamChunk {
-                            request_id: request_id_clone.clone(),
+                            request_id: request_id_arc.clone(),
                             index,
                             delta: text,
                             token_id: next_token,
@@ -1180,6 +1278,58 @@ impl Daemon {
         });
 
         Ok((rx, prompt_tokens, request_id))
+    }
+
+    /// Get current memory pressure level
+    pub fn memory_pressure(&self) -> MemoryPressure {
+        self.memory_monitor
+            .as_ref()
+            .map(|m| m.pressure())
+            .unwrap_or(MemoryPressure::Normal)
+    }
+
+    /// Get memory statistics
+    pub fn memory_stats(&self) -> Option<crate::memory_monitor::MemoryStats> {
+        self.memory_monitor.as_ref().map(|m| m.stats())
+    }
+
+    /// Check if memory recovery is needed
+    pub fn needs_memory_recovery(&self) -> bool {
+        self.recovery_manager.needs_recovery()
+    }
+
+    /// Log memory warning if pressure is elevated
+    #[allow(dead_code)]
+    fn log_memory_pressure(&self) {
+        if let Some(monitor) = &self.memory_monitor {
+            let pressure = monitor.pressure();
+            let stats = monitor.stats();
+
+            match pressure {
+                MemoryPressure::Warning => {
+                    eprintln!(
+                        "[WARN] Memory pressure elevated: {:.1}% GPU, {:.1}% system",
+                        stats.gpu_usage() * 100.0,
+                        stats.system_usage() * 100.0
+                    );
+                }
+                MemoryPressure::Critical => {
+                    eprintln!(
+                        "[ERROR] Memory pressure CRITICAL: {:.1}% GPU, {:.1}% system",
+                        stats.gpu_usage() * 100.0,
+                        stats.system_usage() * 100.0
+                    );
+                }
+                MemoryPressure::Emergency => {
+                    eprintln!(
+                        "[ERROR] Memory EMERGENCY: {:.1}% GPU, {:.1}% system - recovery needed",
+                        stats.gpu_usage() * 100.0,
+                        stats.system_usage() * 100.0
+                    );
+                }
+                MemoryPressure::Normal => {}
+            }
+        }
     }
 
     /// Check if shutdown was requested
@@ -1234,6 +1384,18 @@ impl DaemonBuilder {
 
     pub fn threads_per_model(mut self, threads: i32) -> Self {
         self.config.threads_per_model = threads;
+        self
+    }
+
+    /// Configure memory monitoring
+    pub fn memory_config(mut self, config: MemoryConfig) -> Self {
+        self.config.memory_config = config;
+        self
+    }
+
+    /// Enable or disable memory monitoring
+    pub fn enable_memory_monitoring(mut self, enable: bool) -> Self {
+        self.config.enable_memory_monitoring = enable;
         self
     }
 

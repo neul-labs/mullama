@@ -1,0 +1,26 @@
+# DeepSeek R1 Distill 7B - Advanced reasoning model
+# Chain-of-thought reasoning with thinking tokens
+
+FROM hf:bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
+
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 40
+PARAMETER num_ctx 16384
+PARAMETER stop "<|end▁of▁sentence|>"
+
+SYSTEM """You are a helpful assistant with strong reasoning capabilities. Think through problems step by step."""
+
+TEMPLATE """<|begin▁of▁sentence|><|User|>{{ .Prompt }}
+<|Assistant|>"""
+
+GPU_LAYERS 0
+
+THINKING start "<think>"
+THINKING end "</think>"
+THINKING enabled true
+
+CAPABILITY json true
+CAPABILITY tools false
+CAPABILITY thinking true
+CAPABILITY vision false

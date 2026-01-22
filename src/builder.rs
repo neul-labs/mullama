@@ -56,7 +56,8 @@
 //! ```
 
 use crate::{
-    Context, ContextParams, Model, ModelParams, MullamaError, SamplerChain, SamplerParams,
+    context::KvCacheType, Context, ContextParams, Model, ModelParams, MullamaError, SamplerChain,
+    SamplerParams,
 };
 use std::sync::Arc;
 
@@ -356,6 +357,8 @@ pub struct ContextBuilder {
     embeddings: bool,
     flash_attn_type: crate::sys::llama_flash_attn_type,
     offload_kqv: bool,
+    type_k: KvCacheType,
+    type_v: KvCacheType,
 }
 
 impl ContextBuilder {
@@ -388,6 +391,8 @@ impl ContextBuilder {
             embeddings: false,
             flash_attn_type: crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_AUTO,
             offload_kqv: false,
+            type_k: KvCacheType::default(),
+            type_v: KvCacheType::default(),
         }
     }
 
@@ -575,6 +580,53 @@ impl ContextBuilder {
         self
     }
 
+    /// Set KV-cache quantization type for both K and V caches
+    ///
+    /// Lower precision types reduce memory usage but may slightly affect quality:
+    /// - F16 (default): Best quality, baseline memory
+    /// - Q8_0: ~50% memory savings
+    /// - Q4_0: ~75% memory savings
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_type` - The quantization type for both K and V caches
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mullama::builder::ContextBuilder;
+    /// # use mullama::context::KvCacheType;
+    /// # use std::sync::Arc;
+    /// # let model = Arc::new(mullama::Model::load("").unwrap());
+    /// let builder = ContextBuilder::new(model)
+    ///     .kv_cache_type(KvCacheType::Q8_0); // 50% memory savings
+    /// ```
+    pub fn kv_cache_type(mut self, cache_type: KvCacheType) -> Self {
+        self.type_k = cache_type;
+        self.type_v = cache_type;
+        self
+    }
+
+    /// Set Key cache quantization type separately
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_type` - The quantization type for the K cache
+    pub fn key_cache_type(mut self, cache_type: KvCacheType) -> Self {
+        self.type_k = cache_type;
+        self
+    }
+
+    /// Set Value cache quantization type separately
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_type` - The quantization type for the V cache
+    pub fn value_cache_type(mut self, cache_type: KvCacheType) -> Self {
+        self.type_v = cache_type;
+        self
+    }
+
     /// Apply performance optimizations
     ///
     /// This enables flash attention, optimizes thread counts,
@@ -599,7 +651,8 @@ impl ContextBuilder {
 
     /// Optimize for memory usage
     ///
-    /// This reduces batch sizes and disables memory-intensive features.
+    /// This reduces batch sizes, uses Q4 quantized KV cache (~75% memory savings),
+    /// and disables memory-intensive features.
     ///
     /// # Example
     ///
@@ -611,10 +664,54 @@ impl ContextBuilder {
     ///     .optimize_for_memory();
     /// ```
     pub fn optimize_for_memory(mut self) -> Self {
-        self.n_ctx = 1024;
+        self.n_ctx = 2048;
         self.n_batch = 256;
         self.n_ubatch = 256;
-        self.flash_attn_type = crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        self.type_k = KvCacheType::Q4_0;
+        self.type_v = KvCacheType::Q4_0;
+        self.flash_attn_type = crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        self
+    }
+
+    /// Balanced optimization (Q8 KV cache)
+    ///
+    /// Uses Q8 quantized KV cache for ~50% memory savings with minimal quality loss.
+    /// Good balance between memory usage and output quality.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mullama::builder::ContextBuilder;
+    /// # use std::sync::Arc;
+    /// # let model = Arc::new(mullama::Model::load("").unwrap());
+    /// let builder = ContextBuilder::new(model)
+    ///     .optimize_balanced();
+    /// ```
+    pub fn optimize_balanced(mut self) -> Self {
+        self.type_k = KvCacheType::Q8_0;
+        self.type_v = KvCacheType::Q8_0;
+        self.flash_attn_type = crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        self.offload_kqv = true;
+        self
+    }
+
+    /// Optimize for quality (F16 KV cache)
+    ///
+    /// Uses full F16 precision KV cache for best output quality.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mullama::builder::ContextBuilder;
+    /// # use std::sync::Arc;
+    /// # let model = Arc::new(mullama::Model::load("").unwrap());
+    /// let builder = ContextBuilder::new(model)
+    ///     .optimize_for_quality();
+    /// ```
+    pub fn optimize_for_quality(mut self) -> Self {
+        self.type_k = KvCacheType::F16;
+        self.type_v = KvCacheType::F16;
+        self.flash_attn_type = crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_AUTO;
         self
     }
 
@@ -651,6 +748,8 @@ impl ContextBuilder {
             embeddings: self.embeddings,
             flash_attn_type: self.flash_attn_type,
             offload_kqv: self.offload_kqv,
+            type_k: self.type_k,
+            type_v: self.type_v,
             ..Default::default()
         };
 
@@ -680,6 +779,8 @@ impl ContextBuilder {
             embeddings: self.embeddings,
             flash_attn_type: self.flash_attn_type,
             offload_kqv: self.offload_kqv,
+            type_k: self.type_k,
+            type_v: self.type_v,
             ..Default::default()
         };
 

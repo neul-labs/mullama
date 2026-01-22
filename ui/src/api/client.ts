@@ -72,6 +72,21 @@ export interface PullProgress {
   speed?: string
 }
 
+export interface DefaultModel {
+  name: string
+  description: string
+  size_hint: string
+  tags: string[]
+  from: string
+  has_thinking: boolean
+  has_vision: boolean
+  has_tools: boolean
+}
+
+export interface DefaultsResponse {
+  models: DefaultModel[]
+}
+
 // Fetch wrapper with error handling
 async function fetchApi<T>(
   path: string,
@@ -265,6 +280,17 @@ export const management = {
 
   async unloadModel(name: string): Promise<{ success: boolean; message: string }> {
     return fetchApi<{ success: boolean; message: string }>(`/api/models/${encodeURIComponent(name)}/unload`, {
+      method: 'POST',
+    })
+  },
+
+  async listDefaults(): Promise<DefaultModel[]> {
+    const response = await fetchApi<DefaultsResponse>('/api/defaults')
+    return response.models
+  },
+
+  async useDefault(name: string): Promise<{ success: boolean; message: string; model?: any }> {
+    return fetchApi<{ success: boolean; message: string; model?: any }>(`/api/defaults/${encodeURIComponent(name)}/use`, {
       method: 'POST',
     })
   },

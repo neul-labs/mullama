@@ -1,0 +1,27 @@
+# Llama 3.2 1B Instruct - Fast and lightweight
+# Meta's compact instruction-tuned model
+
+FROM hf:bartowski/Llama-3.2-1B-Instruct-GGUF:Llama-3.2-1B-Instruct-Q4_K_M.gguf
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 8192
+PARAMETER stop "<|eot_id|>"
+PARAMETER stop "<|eom_id|>"
+
+SYSTEM """You are a helpful, harmless, and honest AI assistant."""
+
+TEMPLATE """<|begin_of_text|><|start_header_id|>system<|end_header_id|}
+
+{{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{{ .Prompt }}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+
+GPU_LAYERS 0
+CAPABILITY json true
+CAPABILITY tools false
+CAPABILITY thinking false
+CAPABILITY vision false

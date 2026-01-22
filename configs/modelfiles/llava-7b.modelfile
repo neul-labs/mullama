@@ -1,0 +1,25 @@
+# LLaVA 1.5 7B - Vision and language model
+# Multimodal model for image understanding
+
+FROM hf:mys/ggml_llava-v1.5-7b:ggml-model-q4_k.gguf
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 4096
+PARAMETER stop "</s>"
+
+SYSTEM """You are a helpful AI assistant that can understand images."""
+
+TEMPLATE """{% if .System %}{{ .System }}
+
+{% endif %}USER: {{ .Prompt }}
+ASSISTANT:"""
+
+GPU_LAYERS 0
+VISION_PROJECTOR mmproj-model-f16.gguf
+
+CAPABILITY json false
+CAPABILITY tools false
+CAPABILITY thinking false
+CAPABILITY vision true

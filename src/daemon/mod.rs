@@ -42,6 +42,7 @@
 
 mod anthropic;
 mod client;
+pub mod defaults;
 mod hf;
 mod models;
 mod openai;
@@ -106,6 +107,9 @@ pub use spawn::{
 
 // Embedded Web UI
 pub use ui::{serve_ui, ui_available};
+
+// Default models
+pub use defaults::{get_default, list_default_infos, list_defaults, DefaultModel, DefaultModelInfo};
 
 /// Default IPC socket path
 #[cfg(unix)]

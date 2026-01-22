@@ -369,7 +369,14 @@ async fn handle_messages(
 
     // Generate
     let result = daemon
-        .generate_text(&loaded, &prompt, request.max_tokens, request.temperature, &all_stops)
+        .generate_text(
+            &loaded,
+            &prompt,
+            request.max_tokens,
+            request.temperature,
+            &all_stops,
+            None, // Anthropic API doesn't support response_format yet
+        )
         .await
         .map_err(|e| ApiError::generation_failed(e.to_string()))?;
 

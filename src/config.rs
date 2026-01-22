@@ -44,7 +44,7 @@
 //! let loaded_config: MullamaConfig = serde_json::from_str(&json).unwrap();
 //! ```
 
-use crate::{ContextParams, ModelParams, MullamaError, SamplerParams};
+use crate::{ContextParams, KvCacheType, ModelParams, MullamaError, SamplerParams};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -142,6 +142,14 @@ pub struct ContextConfig {
     /// Offload KQV operations to GPU
     #[serde(default)]
     pub offload_kqv: bool,
+    /// Key cache quantization type (default: F16)
+    /// Use Q8_0 for ~50% memory savings, Q4_0 for ~75% savings
+    #[serde(default)]
+    pub type_k: KvCacheType,
+    /// Value cache quantization type (default: F16)
+    /// Use Q8_0 for ~50% memory savings, Q4_0 for ~75% savings
+    #[serde(default)]
+    pub type_v: KvCacheType,
 }
 
 impl Default for ContextConfig {
@@ -156,6 +164,8 @@ impl Default for ContextConfig {
             embeddings: false,
             flash_attn: false,
             offload_kqv: false,
+            type_k: KvCacheType::default(),
+            type_v: KvCacheType::default(),
         }
     }
 }
@@ -468,6 +478,16 @@ impl MullamaConfig {
                 .parse()
                 .map_err(|e| MullamaError::ConfigError(format!("Invalid n_threads: {}", e)))?;
         }
+        if let Ok(type_k) = std::env::var("MULLAMA_CONTEXT_TYPE_K") {
+            config.context.type_k = type_k
+                .parse()
+                .map_err(|e| MullamaError::ConfigError(format!("Invalid type_k: {}", e)))?;
+        }
+        if let Ok(type_v) = std::env::var("MULLAMA_CONTEXT_TYPE_V") {
+            config.context.type_v = type_v
+                .parse()
+                .map_err(|e| MullamaError::ConfigError(format!("Invalid type_v: {}", e)))?;
+        }
 
         // Sampling configuration
         if let Ok(temperature) = std::env::var("MULLAMA_SAMPLING_TEMPERATURE") {
@@ -610,6 +630,8 @@ impl MullamaConfig {
                 crate::sys::llama_flash_attn_type::LLAMA_FLASH_ATTN_TYPE_AUTO
             },
             offload_kqv: self.context.offload_kqv,
+            type_k: self.context.type_k,
+            type_v: self.context.type_v,
             ..Default::default()
         }
     }
@@ -692,6 +714,9 @@ pub mod presets {
         let mut config = MullamaConfig::default();
         config.context.n_ctx = 1024; // Smaller context
         config.context.n_batch = 256; // Smaller batch
+        config.context.type_k = crate::KvCacheType::Q4_0; // 75% memory savings
+        config.context.type_v = crate::KvCacheType::Q4_0;
+        config.context.flash_attn = true;
         config.performance.memory_optimization = 3;
         config.model.use_mmap = true;
         config

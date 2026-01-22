@@ -1,7 +1,111 @@
 use crate::{
-    batch::Batch, error::MullamaError, model::Model, sampling::SamplerParams, sys, token::TokenId,
+    batch::Batch,
+    error::MullamaError,
+    model::Model,
+    sampling::SamplerParams,
+    sys,
+    token::{GenerationBuffer, TokenId},
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// KV-cache quantization type
+///
+/// Controls the precision of the Key and Value cache, trading off memory usage
+/// for potential quality loss. Lower precision types use less memory but may
+/// slightly affect output quality.
+///
+/// # Memory Savings (approximate, vs F16 baseline)
+/// - F32: 2x memory (highest precision)
+/// - F16/BF16: 1x memory (default)
+/// - Q8_0: 0.5x memory (~50% reduction)
+/// - Q4_0: 0.25x memory (~75% reduction)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KvCacheType {
+    /// 32-bit floating point (highest precision, 2x memory vs F16)
+    F32,
+    /// 16-bit floating point (default, best balance of quality and memory)
+    #[default]
+    F16,
+    /// BrainFloat16 (alternative 16-bit format, good for training)
+    BF16,
+    /// 8-bit quantized (~50% memory savings vs F16)
+    Q8_0,
+    /// 4-bit quantized (~75% memory savings vs F16, may affect quality)
+    Q4_0,
+}
+
+impl KvCacheType {
+    /// Convert to llama.cpp ggml_type
+    pub fn to_ggml_type(self) -> sys::ggml_type {
+        match self {
+            Self::F32 => sys::ggml_type::GGML_TYPE_F32,
+            Self::F16 => sys::ggml_type::GGML_TYPE_F16,
+            Self::BF16 => sys::ggml_type::GGML_TYPE_BF16,
+            Self::Q8_0 => sys::ggml_type::GGML_TYPE_Q8_0,
+            Self::Q4_0 => sys::ggml_type::GGML_TYPE_Q4_0,
+        }
+    }
+
+    /// Get approximate memory multiplier relative to F16
+    ///
+    /// Returns a factor indicating relative memory usage:
+    /// - 2.0 for F32 (uses 2x the memory of F16)
+    /// - 1.0 for F16/BF16 (baseline)
+    /// - 0.5 for Q8_0 (uses half the memory of F16)
+    /// - 0.25 for Q4_0 (uses quarter the memory of F16)
+    pub fn memory_factor(self) -> f32 {
+        match self {
+            Self::F32 => 2.0,
+            Self::F16 | Self::BF16 => 1.0,
+            Self::Q8_0 => 0.5,
+            Self::Q4_0 => 0.25,
+        }
+    }
+
+    /// Parse from string (for CLI/config)
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "f32" => Some(Self::F32),
+            "f16" => Some(Self::F16),
+            "bf16" => Some(Self::BF16),
+            "q8_0" | "q8" => Some(Self::Q8_0),
+            "q4_0" | "q4" => Some(Self::Q4_0),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for KvCacheType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::F32 => write!(f, "f32"),
+            Self::F16 => write!(f, "f16"),
+            Self::BF16 => write!(f, "bf16"),
+            Self::Q8_0 => write!(f, "q8_0"),
+            Self::Q4_0 => write!(f, "q4_0"),
+        }
+    }
+}
+
+impl std::str::FromStr for KvCacheType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "f32" => Ok(Self::F32),
+            "f16" => Ok(Self::F16),
+            "bf16" => Ok(Self::BF16),
+            "q8_0" | "q8" => Ok(Self::Q8_0),
+            "q4_0" | "q4" => Ok(Self::Q4_0),
+            _ => Err(format!(
+                "Invalid KV-cache type '{}'. Valid options: f32, f16, bf16, q8_0, q4_0",
+                s
+            )),
+        }
+    }
+}
 
 /// Parameters for creating a context
 #[derive(Debug, Clone)]
@@ -30,6 +134,16 @@ pub struct ContextParams {
     pub op_offload: bool,
     pub swa_full: bool,
     pub kv_unified: bool,
+    /// Key cache quantization type (default: F16)
+    ///
+    /// Lower precision types save memory but may slightly affect quality.
+    /// Q8_0 provides ~50% memory savings, Q4_0 provides ~75% savings.
+    pub type_k: KvCacheType,
+    /// Value cache quantization type (default: F16)
+    ///
+    /// Lower precision types save memory but may slightly affect quality.
+    /// Q8_0 provides ~50% memory savings, Q4_0 provides ~75% savings.
+    pub type_v: KvCacheType,
 }
 
 impl Default for ContextParams {
@@ -59,6 +173,8 @@ impl Default for ContextParams {
             op_offload: false,
             swa_full: true,
             kv_unified: false,
+            type_k: KvCacheType::default(),
+            type_v: KvCacheType::default(),
         }
     }
 }
@@ -100,6 +216,10 @@ impl Context {
         llama_params.op_offload = params.op_offload;
         llama_params.swa_full = params.swa_full;
         llama_params.kv_unified = params.kv_unified;
+
+        // Apply KV-cache quantization types
+        llama_params.type_k = params.type_k.to_ggml_type();
+        llama_params.type_v = params.type_v.to_ggml_type();
 
         // Create the context
         let ctx_ptr = unsafe { sys::llama_init_from_model(model.as_ptr(), llama_params) };
@@ -211,8 +331,9 @@ impl Context {
         // Create sampler chain with the provided parameters
         let mut sampler = sampler_params.build_chain(self.model.clone())?;
 
-        // Generation loop
-        let mut generated_tokens = Vec::new();
+        // Generation loop - uses SmallVec for stack allocation when possible
+        // For up to 256 tokens, this avoids heap allocation (Rust-exclusive optimization)
+        let mut generated_tokens = GenerationBuffer::new();
         for _ in 0..max_tokens {
             // Sample next token (idx=-1 for last token's logits)
             let token = sampler.sample(self, -1);
@@ -274,8 +395,8 @@ impl Context {
         // Create sampler chain
         let mut sampler = sampler_params.build_chain(self.model.clone())?;
 
-        // Generation loop with streaming
-        let mut generated_tokens = Vec::new();
+        // Generation loop with streaming - uses SmallVec for stack allocation
+        let mut generated_tokens = GenerationBuffer::new();
         for _ in 0..max_tokens {
             // Sample next token
             let token = sampler.sample(self, -1);

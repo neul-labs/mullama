@@ -88,14 +88,17 @@
 //! # }
 //! ```
 
+pub mod arena;
 pub mod batch;
 pub mod capabilities;
 pub mod context;
 pub mod embedding;
 pub mod error;
 pub mod memory;
+pub mod memory_monitor;
 pub mod model;
 pub mod sampling;
+pub mod sampling_simd;
 pub mod session;
 pub mod sys;
 pub mod token;
@@ -132,6 +135,7 @@ pub mod grammar;
 pub mod huggingface;
 pub mod lora;
 pub mod modelfile;
+pub mod structured_output;
 
 // Export Hugging Face types at crate root for convenience
 pub use huggingface::{GGUFFile, HFClient, HFModelInfo, ModelSearchFilters, QuantizationType};
@@ -141,6 +145,9 @@ pub use modelfile::{
     find_modelfile, Message as ModelfileMessage, Modelfile, ModelfileError, ModelfileParser,
     ParameterValue,
 };
+
+// Export structured output types
+pub use structured_output::{JsonSchemaConverter, StructuredOutputError};
 
 // ==================== System-level Functions ====================
 
@@ -343,22 +350,34 @@ pub mod control_vector;
 pub mod quantization;
 
 // Re-export the public API
+pub use arena::{
+    with_generation_arena, with_generation_arena_mut, ArenaCandidates, ArenaTokenCandidate,
+    GenerationArena,
+};
 pub use batch::Batch;
 pub use capabilities::{
     detect_capabilities, registry, Capabilities, CapabilityRegistry, ModelFamilyConfig,
     ThinkingTokens, TokenConfig, ToolFormat,
 };
-pub use context::{Context, ContextParams};
+pub use context::{Context, ContextParams, KvCacheType};
 pub use embedding::{EmbeddingUtil, Embeddings};
 pub use error::MullamaError;
 pub use memory::MemoryManager;
+pub use memory_monitor::{
+    MemoryConfig, MemoryMonitor, MemoryPressure, MemoryStats, RecoveryManager, RecoveryResult,
+    RecoveryStrategy,
+};
 pub use model::{Model, ModelKvOverride, ModelKvOverrideValue, ModelParams, Token};
 pub use sampling::{
-    LogitBias, Sampler, SamplerChain, SamplerChainParams, SamplerParams, SamplerPerfData,
-    TokenData, TokenDataArray,
+    AlignedTokenData, AlignedTokenDataArray, LogitBias, Sampler, SamplerChain, SamplerChainParams,
+    SamplerParams, SamplerPerfData, TokenData, TokenDataArray,
+};
+pub use sampling_simd::{
+    has_avx2, has_avx512, has_neon, simd_max_f32, simd_softmax, simd_sum_f32, simd_top_k,
+    SimdCapabilities,
 };
 pub use session::Session;
-pub use token::{Token as TokenStruct, TokenId};
+pub use token::{GenerationBuffer, Token as TokenStruct, TokenBuffer, TokenId};
 pub use vocab::Vocabulary;
 
 // Re-export integration features
