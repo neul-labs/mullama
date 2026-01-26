@@ -1,19 +1,51 @@
-# 🚀 Getting Started with Mullama
+# Getting Started with Mullama
 
-This guide will help you get up and running with Mullama's advanced integration features quickly.
+This guide will help you get up and running with Mullama quickly.
 
-## 📋 Table of Contents
+## Quick Install
 
-- [Installation](#-installation)
-- [Basic Setup](#-basic-setup)
-- [Feature Overview](#-feature-overview)
-- [Your First Application](#-your-first-application)
-- [Common Patterns](#-common-patterns)
-- [Next Steps](#-next-steps)
+**One-liner (Linux/macOS):**
 
-## 🛠️ Installation
+```bash
+curl -fsSL https://mullama.dev/install.sh | sh
+```
 
-### Basic Installation
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://mullama.dev/install.ps1 | iex
+```
+
+**Then run your first model:**
+
+```bash
+mullama run llama3.2:1b "Hello, AI!"
+```
+
+Coming from Ollama? Your commands work unchanged: `run`, `pull`, `serve`, `list`, `chat`.
+
+---
+
+## Table of Contents
+
+- [Installation Options](#installation-options)
+- [Basic Setup](#basic-setup)
+- [Feature Overview](#feature-overview)
+- [Your First Application](#your-first-application)
+- [Common Patterns](#common-patterns)
+- [Next Steps](#next-steps)
+
+## Installation Options
+
+### CLI / Daemon (Recommended)
+
+Use the one-liner above, or install with Cargo:
+
+```bash
+cargo install mullama --features daemon
+```
+
+### Rust Library
 
 Add Mullama to your `Cargo.toml`:
 

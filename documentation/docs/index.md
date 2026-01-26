@@ -1,18 +1,23 @@
 ---
-title: Mullama - Run LLMs Locally with Native Performance
-description: High-performance LLM inference engine with native Node.js, Python, Go, PHP, and C/C++ bindings. OpenAI-compatible API server. Ollama alternative.
+title: Mullama - Drop-in Ollama Replacement with Native Language Bindings
+description: Drop-in Ollama replacement with native Node.js, Python, Go, PHP, and C/C++ bindings. OpenAI and Anthropic-compatible API server. All-in-one LLM toolkit.
 ---
 
 <div class="hero" markdown>
 
-# Run LLMs locally. Embed them natively. Ship faster.
+# Drop-in Ollama replacement. Native language bindings. Production-ready.
 
-Mullama is a production-ready LLM inference engine built in Rust. Use it as a **native library** in your application or as a **daemon** with OpenAI and Anthropic-compatible APIs.
+Mullama is a local LLM server and library that works just like Ollama -- same CLI commands, same Modelfile syntax -- but with native bindings for **Python, Node.js, Go, PHP, Rust, and C/C++**.
+
+```bash
+curl -fsSL https://mullama.dev/install.sh | sh
+mullama run llama3.2:1b "Hello!"
+```
 
 <div class="hero-actions" markdown>
 
 [Get Started](getting-started/index.md){ .md-button .md-button--primary }
-[Try the CLI](daemon/index.md){ .md-button }
+[Compare to Ollama](comparison/vs-ollama.md){ .md-button }
 [View on GitHub](https://github.com/neul-labs/mullama){ .md-button }
 
 </div>

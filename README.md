@@ -1,266 +1,173 @@
 # Mullama
 
-**Comprehensive Rust bindings for llama.cpp with advanced integration features**
+**Drop-in Ollama replacement. All-in-one LLM toolkit.**
 
 [![Crates.io](https://img.shields.io/crates/v/mullama)](https://crates.io/crates/mullama)
-[![Documentation](https://docs.rs/mullama/badge.svg)](https://docs.rs/mullama)
+[![PyPI](https://img.shields.io/pypi/v/mullama)](https://pypi.org/project/mullama/)
+[![npm](https://img.shields.io/npm/v/mullama)](https://www.npmjs.com/package/mullama)
+[![Documentation](https://img.shields.io/badge/docs-neullabs.com-blue)](https://docs.neullabs.com/mullama/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Mullama provides memory-safe Rust bindings for llama.cpp with production-ready features including async/await support, real-time streaming, multimodal processing, and web framework integration.
+Mullama is a local LLM server and library that works just like Ollama -- same CLI commands, same model format, same Modelfile syntax -- but with native language bindings for Rust, Python, Node.js, Go, PHP, and C/C++.
 
-## Why Mullama?
+**Coming from Ollama?** Your commands work unchanged:
 
-Most llama.cpp Rust bindings expose low-level C APIs directly. Mullama provides an **idiomatic Rust experience**:
-
-```rust
-// Other wrappers: manual memory management, raw pointers, verbose setup
-let params = llama_context_default_params();
-let ctx = unsafe { llama_new_context_with_model(model, params) };
-let tokens = unsafe { llama_tokenize(model, text.as_ptr(), ...) };
-// Don't forget to free everything...
-
-// Mullama: builder patterns, async/await, automatic resource management
-let model = ModelBuilder::new()
-    .path("model.gguf")
-    .gpu_layers(35)
-    .build().await?;
-
-let response = model.generate("Hello", 100).await?;
+```bash
+mullama run llama3.2:1b "Hello!"
+mullama pull qwen2.5:7b
+mullama serve
+mullama list
 ```
 
-**Developer experience improvements:**
+## Install
 
-| Feature | Other Wrappers | Mullama |
-|---------|---------------|---------|
-| API Style | Raw FFI / C-like | Builder patterns, fluent API |
-| Async Support | Manual threading | Native async/await with Tokio |
-| Error Handling | Error codes / panics | `Result<T, MullamaError>` with context |
-| Memory Management | Manual free/cleanup | Automatic RAII |
-| Streaming | Callbacks | `Stream` trait, async iterators |
-| Configuration | Struct fields | Type-safe builders with validation |
-| Web Integration | DIY | Built-in Axum routes |
+**One-liner (Linux/macOS):**
 
-## Key Features
+```bash
+curl -fsSL https://mullama.dev/install.sh | sh
+```
 
-- **Async/Await Native** - Full Tokio integration for non-blocking operations
-- **Real-time Streaming** - Token-by-token generation with backpressure handling
-- **Multimodal Processing** - Text, image, and audio in a single pipeline
-- **Late Interaction / ColBERT** - Multi-vector embeddings with MaxSim scoring for retrieval
-- **Web Framework Ready** - Direct Axum integration with REST APIs
-- **WebSocket Support** - Real-time bidirectional communication
-- **Parallel Processing** - Work-stealing parallelism for batch operations
-- **GPU Acceleration** - CUDA, Metal, ROCm, and OpenCL support
-- **Memory Safe** - Zero unsafe operations in public API
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://mullama.dev/install.ps1 | iex
+```
+
+**Package managers:**
+
+```bash
+# Rust library
+cargo add mullama
+
+# Python
+pip install mullama
+
+# Node.js
+npm install mullama
+
+# Go
+go get github.com/neul-labs/mullama-go
+
+# PHP
+composer require neul-labs/mullama
+```
 
 ## Quick Start
 
-### Installation
-
-```toml
-[dependencies]
-mullama = "0.1.1"
-
-# With all features
-mullama = { version = "0.1.1", features = ["full"] }
-```
-
-### Prerequisites
-
-**Linux (Ubuntu/Debian):**
 ```bash
-sudo apt install -y build-essential cmake pkg-config libasound2-dev libpulse-dev
-```
+# Run a model (daemon auto-starts)
+mullama run llama3.2:1b "What is the capital of France?"
 
-**macOS:**
-```bash
-brew install cmake pkg-config portaudio
-```
+# Interactive chat
+mullama chat
 
-**Windows:** Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) and [CMake](https://cmake.org/download/).
-
-See [Platform Setup Guide](./docs/PLATFORM_SETUP.md) for detailed instructions.
-
-### Basic Example
-
-```rust
-use mullama::prelude::*;
-
-#[tokio::main]
-async fn main() -> Result<(), MullamaError> {
-    let model = ModelBuilder::new()
-        .path("model.gguf")
-        .context_size(4096)
-        .build().await?;
-
-    let response = model.generate("The future of AI is", 100).await?;
-    println!("{}", response);
-
-    Ok(())
-}
-```
-
-## Feature Flags
-
-```toml
-[dependencies.mullama]
-version = "0.1.1"
-features = [
-    "async",              # Async/await support
-    "streaming",          # Token streaming
-    "web",                # Axum web framework
-    "websockets",         # WebSocket support
-    "multimodal",         # Image and audio processing
-    "streaming-audio",    # Real-time audio capture
-    "format-conversion",  # Audio/image format conversion
-    "parallel",           # Rayon parallel processing
-    "late-interaction",   # ColBERT-style multi-vector embeddings
-    "daemon",             # Daemon mode with TUI client
-    "full"                # All features
-]
-```
-
-### Common Combinations
-
-```toml
-# Web applications
-features = ["web", "websockets", "async", "streaming"]
-
-# Multimodal AI
-features = ["multimodal", "streaming-audio", "format-conversion"]
-
-# High-performance batch processing
-features = ["parallel", "async"]
-
-# Semantic search / RAG with ColBERT-style retrieval
-features = ["late-interaction", "parallel"]
-
-# Daemon with TUI chat interface
-features = ["daemon"]
-```
-
-## Daemon Mode
-
-Mullama includes a multi-model daemon with OpenAI and Anthropic-compatible HTTP APIs, embedded Web UI, and TUI client.
-
-### Quick Start
-
-```bash
-# Build the CLI
-cargo build --release --features daemon
-
-# Run with a model (daemon auto-spawns if not running)
-mullama run llama3.2:1b "What is the meaning of life?"
-
-# Or start daemon explicitly
+# Start OpenAI-compatible server
 mullama serve --model llama3.2:1b
 
-# Interactive TUI chat
-mullama chat
+# Use with OpenAI SDK (any language)
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama3.2:1b", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-### Model Aliases
+## Use as a Library (No Server Required)
 
-Use simple aliases instead of full HuggingFace paths:
+Unlike Ollama, Mullama can be embedded directly in your application -- no HTTP overhead, no separate daemon.
 
-```bash
-# Short aliases (automatically resolve to HuggingFace)
-mullama run llama3.2:1b "Hello!"
-mullama run qwen2.5:7b-instruct "Explain quantum computing"
-mullama run deepseek-r1:7b "Solve: 2x + 5 = 15"
-mullama run mistral:7b "Write a haiku"
-mullama run phi3:mini "What is Rust?"
+**Python:**
 
-# Full HuggingFace paths still work
-mullama run hf:meta-llama/Llama-3.2-1B-Instruct-GGUF "Hello!"
+```python
+from mullama import Model, Context
 
-# Multiple models
-mullama serve --model llama3.2:1b --model qwen2.5:7b-instruct
+model = Model.load('llama3.2-1b.gguf', n_gpu_layers=32)
+ctx = Context(model, n_ctx=4096)
+response = ctx.generate('Hello, AI!')
+print(response)
 ```
 
-See `configs/models.toml` for the full list of 40+ preconfigured model aliases.
+**Node.js:**
 
-### Modelfile / Mullamafile
+```javascript
+const { Model, Context } = require('mullama');
 
-Create custom models with configuration (Ollama-compatible):
-
-```dockerfile
-# Modelfile (Ollama-compatible)
-FROM llama3.2:1b
-
-PARAMETER temperature 0.7
-PARAMETER num_ctx 8192
-
-SYSTEM """
-You are a helpful coding assistant.
-"""
+const model = await Model.load('llama3.2-1b.gguf', { gpuLayers: 32 });
+const ctx = new Context(model, { contextSize: 4096 });
+const response = await ctx.generate('Hello, AI!');
+console.log(response);
 ```
 
-```dockerfile
-# Mullamafile (extended format)
-FROM hf:meta-llama/Llama-3.2-1B-Instruct-GGUF:Q4_K_M
+**Rust:**
 
-PARAMETER temperature 0.7
-PARAMETER top_p 0.9
-PARAMETER num_ctx 8192
+```rust
+use mullama::{Model, Context, ContextParams};
 
-SYSTEM """
-You are a helpful assistant.
-"""
-
-# Mullama extensions
-GPU_LAYERS 32
-FLASH_ATTENTION true
-ADAPTER ./my-lora.safetensors
-VISION_PROJECTOR ./mmproj.gguf
-
-LICENSE MIT
-AUTHOR "Your Name"
+let model = Model::load("llama3.2-1b.gguf")?;
+let mut ctx = Context::new(&model, ContextParams::default())?;
+let response = ctx.generate("Hello, AI!", 256)?;
+println!("{}", response);
 ```
 
-```bash
-# Create model from Modelfile
-mullama create my-assistant -f ./Modelfile
+See [bindings documentation](./documentation/docs/bindings/) for Go, PHP, and C/C++.
 
-# Show model info
-mullama show my-assistant --modelfile
+## Ollama Compatibility + More
 
-# Copy/rename models
-mullama cp my-assistant my-assistant-v2
-```
+| Feature | Mullama | Ollama |
+|---------|:-------:|:------:|
+| CLI commands (`run`, `pull`, `serve`, etc.) | Same syntax | -- |
+| Modelfile format | Compatible | -- |
+| GGUF models | Yes | Yes |
+| OpenAI API compatibility | Yes | Yes |
+| Anthropic API compatibility | Yes | No |
+| Native language bindings | 6 languages | HTTP only |
+| Embed in your app (no daemon) | Yes | No |
+| Web UI | Built-in | No |
+| TUI chat | Built-in | No |
+| ColBERT/late interaction | Yes | No |
+| Streaming audio input | Yes | No |
 
-### CLI Commands
+[Full comparison](./documentation/docs/comparison/vs-ollama.md) | [Migration guide](./documentation/docs/comparison/migration-from-ollama.md)
+
+## All-in-One LLM Toolkit
+
+Mullama includes everything you need:
+
+| Component | Description |
+|-----------|-------------|
+| **CLI** | Familiar commands: `run`, `pull`, `serve`, `list`, `chat`, `create` |
+| **Daemon** | Multi-model server with auto-spawn, hot-reload, session persistence |
+| **REST API** | OpenAI + Anthropic compatible endpoints |
+| **Web UI** | Model management, chat interface, API playground |
+| **TUI** | Terminal-based chat client |
+| **Library** | Native bindings for Rust, Python, Node.js, Go, PHP, C/C++ |
+
+## CLI Commands
 
 ```bash
 # Model management
-mullama list              # List local models with size
-mullama pull llama3.2:1b  # Download without running
-mullama rm old-model      # Remove a model
-mullama ps                # Show running models with memory
+mullama list              # List local models
+mullama pull llama3.2:1b  # Download model
+mullama rm old-model      # Remove model
+mullama ps                # Show running models
 
 # Generation
-mullama run llama3.2:1b "prompt"  # One-shot (auto-spawns daemon)
+mullama run llama3.2:1b "prompt"  # One-shot generation
 mullama chat                       # Interactive TUI
 
-# Daemon management
-mullama daemon start      # Start daemon in background
-mullama daemon stop       # Stop daemon
-mullama daemon restart    # Restart daemon
-mullama daemon status     # Show daemon info
-mullama daemon logs       # View daemon logs
+# Daemon
+mullama serve --model llama3.2:1b  # Start server
+mullama daemon start               # Start in background
+mullama daemon stop                # Stop daemon
+mullama daemon status              # Show status
 
-# Search and info
-mullama search "llama 7b"          # Search HuggingFace
-mullama info TheBloke/Llama-2-7B-GGUF
-
-# Cache management
-mullama cache list        # List cached models
-mullama cache size        # Show cache size
-mullama cache clear       # Clear cache
+# Model creation (Ollama-compatible Modelfile)
+mullama create my-assistant -f ./Modelfile
+mullama show my-assistant --modelfile
 ```
 
-### API Endpoints
+## API Endpoints
 
 **OpenAI-compatible:**
+
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -268,13 +175,13 @@ curl http://localhost:8080/v1/chat/completions \
 ```
 
 **Anthropic-compatible:**
+
 ```bash
 curl http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model": "llama3.2:1b", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-**All endpoints:**
 | Endpoint | Description |
 |----------|-------------|
 | `POST /v1/chat/completions` | OpenAI chat completions |
@@ -282,140 +189,7 @@ curl http://localhost:8080/v1/messages \
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | Generate embeddings |
 | `GET /v1/models` | List available models |
-| `GET /api/models` | Model management API |
-| `POST /api/models/pull` | Pull a model |
-| `DELETE /api/models/:name` | Delete a model |
-| `GET /api/system/status` | System status |
-| `GET /metrics` | Prometheus metrics |
 | `GET /ui/` | Web UI |
-
-### Embedded Web UI
-
-Access the management UI at `http://localhost:8080/ui/` when the daemon is running:
-
-- **Dashboard** - System status, uptime, metrics
-- **Models** - Pull, list, delete models
-- **Chat** - Interactive multi-conversation chat
-- **Playground** - API testing with cURL generation
-- **Settings** - Theme, generation defaults
-
-```bash
-# Build with embedded UI
-cd ui && npm install && npm run build
-cargo build --release --features daemon,embedded-ui
-```
-
-### Auto-Spawn Daemon
-
-The daemon automatically starts when you run commands:
-
-```bash
-# First time: daemon starts automatically
-$ mullama run llama3.2:1b "Hello"
-Daemon not running, starting it automatically...
-Daemon started successfully, connecting...
-Hello! How can I assist you today?
-
-# Subsequent uses: instant connection
-$ mullama chat
-Connected to Mullama daemon v0.1.1 (uptime: 42s)
-```
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `HF_TOKEN` | HuggingFace token for gated/private models |
-| `MULLAMA_CACHE_DIR` | Override default cache directory |
-| `MULLAMA_BIN` | Path to mullama binary (for auto-spawn) |
-
-### Cache Locations
-
-| Platform | Default Location |
-|----------|-----------------|
-| Linux | `$XDG_CACHE_HOME/mullama/models` or `~/.cache/mullama/models` |
-| macOS | `~/Library/Caches/mullama/models` |
-| Windows | `%LOCALAPPDATA%\mullama\models` |
-
-### Architecture
-
-```
-                                   ┌──────────────────────────────────┐
-                                   │           Daemon                 │
-┌─────────────┐                    │  ┌────────────────────────────┐  │
-│  TUI Client │◄── nng (IPC) ─────►│  │     Model Manager          │  │
-└─────────────┘                    │  │  ┌───────┐  ┌───────┐      │  │
-                                   │  │  │Model 1│  │Model 2│ ...  │  │
-┌─────────────┐                    │  │  └───────┘  └───────┘      │  │
-│   curl/app  │◄── HTTP/REST ─────►│  └────────────────────────────┘  │
-└─────────────┘   (OpenAI API)     │                                  │
-                                   │  Endpoints:                      │
-┌─────────────┐                    │  • /v1/chat/completions (OpenAI) │
-│  Web UI     │◄── HTTP ──────────►│  • /v1/messages (Anthropic)     │
-└─────────────┘                    │  • /v1/embeddings                │
-                                   │  • /ui/* (Web UI)                │
-┌─────────────┐                    │  • /metrics (Prometheus)         │
-│ Claude Apps │◄── HTTP ──────────►│  • /api/* (Management)          │
-└─────────────┘  (Anthropic API)   └──────────────────────────────────┘
-```
-
-### Programmatic Usage
-
-```rust
-use mullama::daemon::{DaemonClient, DaemonBuilder};
-
-// Connect as client (auto-spawns daemon if needed)
-let client = DaemonClient::connect_default()?;
-let result = client.chat("Hello, AI!", None, 100, 0.7)?;
-println!("{} ({:.1} tok/s)", result.text, result.tokens_per_second());
-
-// List models
-for model in client.list_models()? {
-    println!("{}: {}M params", model.alias, model.info.parameters / 1_000_000);
-}
-```
-
-## Late Interaction / ColBERT
-
-Mullama supports ColBERT-style late interaction retrieval with multi-vector embeddings. Unlike traditional embeddings that pool all tokens into a single vector, late interaction preserves per-token embeddings for fine-grained matching using MaxSim scoring.
-
-```rust
-use mullama::late_interaction::{
-    MultiVectorGenerator, MultiVectorConfig, LateInteractionScorer
-};
-use std::sync::Arc;
-
-// Create generator (works with any embedding model)
-let model = Arc::new(Model::load("model.gguf")?);
-let config = MultiVectorConfig::default()
-    .normalize(true)
-    .skip_special_tokens(true);
-let mut generator = MultiVectorGenerator::new(model, config)?;
-
-// Generate multi-vector embeddings
-let query = generator.embed_text("What is machine learning?")?;
-let doc = generator.embed_text("Machine learning is a branch of AI...")?;
-
-// Score with MaxSim
-let score = LateInteractionScorer::max_sim(&query, &doc);
-
-// Top-k retrieval
-let documents: Vec<_> = texts.iter()
-    .map(|t| generator.embed_text(t))
-    .collect::<Result<Vec<_>, _>>()?;
-let top_k = LateInteractionScorer::find_top_k(&query, &documents, 10);
-```
-
-**With parallel processing:**
-```rust
-// Enable both features: ["late-interaction", "parallel"]
-let top_k = LateInteractionScorer::find_top_k_parallel(&query, &documents, 10);
-let scores = LateInteractionScorer::batch_score_parallel(&queries, &documents);
-```
-
-**Recommended models:**
-- `LiquidAI/LFM2-ColBERT-350M-GGUF` - Purpose-trained ColBERT model
-- Any GGUF embedding model (works but suboptimal for retrieval)
 
 ## GPU Acceleration
 
@@ -433,19 +207,34 @@ export LLAMA_HIPBLAS=1
 export LLAMA_CLBLAST=1
 ```
 
+## Feature Flags (Rust Library)
+
+```toml
+[dependencies.mullama]
+version = "0.1.1"
+features = [
+    "async",              # Async/await support
+    "streaming",          # Token streaming
+    "web",                # Axum web framework
+    "websockets",         # WebSocket support
+    "multimodal",         # Image and audio processing
+    "streaming-audio",    # Real-time audio capture
+    "parallel",           # Rayon parallel processing
+    "late-interaction",   # ColBERT-style embeddings
+    "daemon",             # Daemon mode with TUI client
+    "full"                # All features
+]
+```
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](./docs/GETTING_STARTED.md) | Installation and first application |
-| [Platform Setup](./docs/PLATFORM_SETUP.md) | OS-specific setup instructions |
-| [Daemon Guide](./docs/DAEMON.md) | Daemon mode, APIs, Web UI, Modelfile |
-| [Features Guide](./docs/FEATURES.md) | Integration features overview |
-| [Use Cases](./docs/USE_CASES.md) | Real-world application examples |
-| [API Reference](./docs/API_REFERENCE.md) | Complete API documentation |
-| [Sampling Guide](./docs/sampling.md) | Sampling strategies and configuration |
-| [GPU Guide](./docs/gpu.md) | GPU acceleration setup |
-| [Feature Status](./docs/FEATURE_STATUS.md) | Implementation status and roadmap |
+| [Getting Started](./docs/GETTING_STARTED.md) | Installation and first steps |
+| [Platform Setup](./docs/PLATFORM_SETUP.md) | OS-specific setup |
+| [Daemon Guide](./docs/DAEMON.md) | Daemon, CLI, API reference |
+| [Migration from Ollama](./docs/MIGRATION_FROM_OLLAMA.md) | Quick migration checklist |
+| [Full Documentation](https://docs.neullabs.com/mullama/) | Complete docs site |
 
 ## Examples
 
@@ -459,17 +248,11 @@ cargo run --example streaming_generation --features "async,streaming"
 # Web service
 cargo run --example web_service --features "web,websockets"
 
-# Audio processing
-cargo run --example streaming_audio_demo --features "streaming-audio,multimodal"
-
 # Late interaction / ColBERT retrieval
 cargo run --example late_interaction --features late-interaction
-cargo run --example late_interaction --features late-interaction -- model.gguf
 ```
 
 ## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 ```bash
 git clone --recurse-submodules https://github.com/neul-labs/mullama.git
@@ -477,26 +260,8 @@ cd mullama
 cargo test --all-features
 ```
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## llama.cpp Compatibility
-
-Mullama tracks upstream llama.cpp releases:
-
-| Mullama Version | llama.cpp Version | Release Date |
-|-----------------|-------------------|--------------|
-| 0.1.x           | b7542             | Dec 2025     |
-
-### Supported Model Architectures
-
-All architectures supported by llama.cpp b7542, including:
-- LLaMA 1/2/3, Mistral, Mixtral, Phi-1/2/3/4
-- Qwen, Qwen2, DeepSeek, Yi, Gemma
-- And [many more](https://github.com/ggml-org/llama.cpp#supported-models)
-
-## Acknowledgments
-
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - The underlying inference engine
-- [ggml](https://github.com/ggerganov/ggml) - Tensor operations library

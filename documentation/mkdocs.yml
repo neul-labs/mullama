@@ -1,6 +1,6 @@
 site_name: Mullama
 site_description: "Run LLMs locally with native performance. High-performance inference engine with Node.js, Python, Go, PHP, and C/C++ bindings, plus OpenAI-compatible API server."
-site_url: https://docs.neullabs.com/
+site_url: https://docs.neullabs.com/mullama/
 repo_url: https://github.com/neul-labs/mullama
 repo_name: neul-labs/mullama
 edit_uri: edit/main/documentation/docs/
@@ -30,13 +30,12 @@ theme:
     - navigation.instant
     - navigation.instant.progress
     - navigation.tracking
-    - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.sections
     - navigation.expand
     - navigation.top
     - navigation.indexes
     - navigation.path
+    - toc.integrate
     - search.suggest
     - search.highlight
     - search.share
